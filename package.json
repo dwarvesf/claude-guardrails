@@ -1,0 +1,39 @@
+{
+  "name": "claude-guardrails",
+  "version": "0.3.0",
+  "description": "Hardened security configuration for Claude Code — deny rules, hooks, and prompt injection defense out of the box",
+  "bin": {
+    "claude-guardrails": "bin/claude-guardrails"
+  },
+  "files": [
+    "bin/",
+    "lite/",
+    "full/",
+    "install.sh",
+    "uninstall.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "security",
+    "guardrails",
+    "hooks",
+    "prompt-injection"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dwarvesf/claude-guardrails.git"
+  },
+  "homepage": "https://github.com/dwarvesf/claude-guardrails",
+  "bugs": {
+    "url": "https://github.com/dwarvesf/claude-guardrails/issues"
+  },
+  "license": "MIT",
+  "author": "Dwarves Foundation <team@dwarves.foundation>"
+}

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# claude-guardrails CLI — thin wrapper for install.sh / uninstall.sh
+# Usage: claude-guardrails <install|uninstall> [lite|full]
+#        claude-guardrails --help | --version
+set -euo pipefail
+
+VERSION="0.3.0"
+
+# Resolve symlinks to find the real package directory (handles npx symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  # Resolve relative symlinks
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+PACKAGE_DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+
+usage() {
+  cat <<EOF
+claude-guardrails v${VERSION}
+
+Hardened security configuration for Claude Code.
+
+Usage:
+  claude-guardrails install [lite|full]   Install guardrails (default: lite)
+  claude-guardrails uninstall [lite|full] Remove guardrails (default: lite)
+  claude-guardrails --help                Show this help
+  claude-guardrails --version             Show version
+
+Variants:
+  lite   3 hooks, 15 deny rules — for trusted projects (default)
+  full   5 hooks + prompt injection scanner — for untrusted codebases
+
+Examples:
+  npx claude-guardrails install
+  npx claude-guardrails install full
+  npx claude-guardrails uninstall
+
+More info: https://github.com/dwarvesf/claude-guardrails
+EOF
+}
+
+case "${1:-}" in
+  install)
+    shift
+    exec bash "$PACKAGE_DIR/install.sh" "${1:-lite}"
+    ;;
+  uninstall)
+    shift
+    exec bash "$PACKAGE_DIR/uninstall.sh" "${1:-lite}"
+    ;;
+  --version|-v)
+    echo "claude-guardrails v${VERSION}"
+    ;;
+  --help|-h|"")
+    usage
+    ;;
+  *)
+    echo "Error: Unknown command '$1'"
+    echo ""
+    usage
+    exit 1
+    ;;
+esac

@@ -26,13 +26,25 @@ brew install jq          # macOS
 # sudo apt install jq    # Debian/Ubuntu
 
 # Lite (3 hooks, 15 deny rules — for trusted projects)
-./install.sh
+npx claude-guardrails install
 
 # Full (5 hooks + prompt injection scanner — for untrusted codebases)
-./install.sh full
+npx claude-guardrails install full
 ```
 
 The script merges into your existing `~/.claude/settings.json` (backing it up first) and is safe to run repeatedly.
+
+<details>
+<summary>Install from source (git clone)</summary>
+
+```bash
+git clone https://github.com/dwarvesf/claude-guardrails.git
+cd claude-guardrails
+./install.sh          # lite
+./install.sh full     # full
+```
+
+</details>
 
 <details>
 <summary>Manual installation</summary>
@@ -49,11 +61,21 @@ If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step
 
 ```bash
 # Remove lite guardrails
-./uninstall.sh
+npx claude-guardrails uninstall
 
 # Remove full guardrails
-./uninstall.sh full
+npx claude-guardrails uninstall full
 ```
+
+<details>
+<summary>Uninstall from source</summary>
+
+```bash
+./uninstall.sh          # lite
+./uninstall.sh full     # full
+```
+
+</details>
 
 The uninstall uses a **surgical remove** approach — it reads the variant's config to identify exactly which deny rules and hooks were added, then subtracts only those entries from your `~/.claude/settings.json`. Your own custom rules, hooks, and other settings are left untouched. It does _not_ restore from a backup, which means it works correctly even if you modified your settings after install.
 

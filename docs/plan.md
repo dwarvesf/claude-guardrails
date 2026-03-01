@@ -24,14 +24,21 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] `uninstall.sh` — Surgical remove (subtracts only guardrails entries, preserves user's custom config)
 - [x] Uninstall section in README documenting the approach
 
+### v0.3 — npx distribution
+- [x] `bin/claude-guardrails` — Shell CLI entrypoint (install, uninstall, --help, --version)
+- [x] `package.json` — Zero-dependency npm package with bin field
+- [x] `LICENSE` — MIT license
+- [x] Updated README Quick Start to lead with `npx claude-guardrails install`
+- [x] Updated README Uninstall to lead with `npx claude-guardrails uninstall`
+
 ## Next Up
 
 ### Polish & ship
-- [ ] Test `install.sh` on clean `~/.claude/` (fresh install path)
-- [ ] Test `install.sh` idempotency (run twice, verify no duplicates)
-- [ ] Test `install.sh full` (prompt injection defender + PostToolUse hook)
-- [ ] Test with pre-existing `settings.json` (merge path)
-- [ ] Add `.gitignore` entry for `.DS_Store` if not already there
+- [x] Test `install.sh` on clean `~/.claude/` (fresh install path)
+- [x] Test `install.sh` idempotency (run twice, verify no duplicates)
+- [x] Test `install.sh full` (prompt injection defender + PostToolUse hook)
+- [x] Test with pre-existing `settings.json` (merge path)
+- [x] Add `.gitignore` entry for `.DS_Store` if not already there
 - [ ] Commit install script + README changes
 - [ ] Tag v0.1 release
 
@@ -39,7 +46,7 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] `uninstall.sh` — Surgical remove approach (done in v0.2)
 - [ ] Version check — Warn if installed config is outdated vs repo
 - [x] CI test — GitHub Action that runs install.sh in a container to verify it works
-- [ ] Homebrew / npx distribution — `npx claude-guardrails install`
+- [x] Homebrew / npx distribution — `npx claude-guardrails install` (done in v0.3)
 - [ ] Per-project install mode — Write to `.claude/settings.local.json` instead of global
 - [ ] Hook test suite — Automated tests that verify each hook blocks what it should
 - [ ] MCP server allowlist template — Starter config for common trusted servers
