@@ -45,6 +45,20 @@ If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step
 
 </details>
 
+## Uninstall
+
+```bash
+# Remove lite guardrails
+./uninstall.sh
+
+# Remove full guardrails
+./uninstall.sh full
+```
+
+The uninstall uses a **surgical remove** approach — it reads the variant's config to identify exactly which deny rules and hooks were added, then subtracts only those entries from your `~/.claude/settings.json`. Your own custom rules, hooks, and other settings are left untouched. It does _not_ restore from a backup, which means it works correctly even if you modified your settings after install.
+
+A pre-uninstall backup is saved to `~/.claude/settings.json.pre-uninstall` in case you need to roll back.
+
 ## How It Works
 
 Five layers, each covering gaps the others miss:

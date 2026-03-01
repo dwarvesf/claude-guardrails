@@ -14,10 +14,15 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] `full/CLAUDE-security-section.md` — Security rules for CLAUDE.md (comprehensive)
 - [x] `full/SETUP.md` — Detailed setup guide with threat model, layer explanations, team deployment
 
-### v0.1 — README + install script (9f8143f + uncommitted)
+### v0.1 — README + install script (4009d87)
 - [x] `README.md` — Quick start, full vs lite comparison table, how-it-works overview, untrusted repo guidance
 - [x] `install.sh` — Automated installer (lite/full), merges settings with deduplication, idempotent, backs up existing config
 - [x] Simplified README Quick Start to one-liner, collapsed manual steps into `<details>` block
+- [x] Known tradeoffs section in README
+
+### v0.2 — Uninstall script
+- [x] `uninstall.sh` — Surgical remove (subtracts only guardrails entries, preserves user's custom config)
+- [x] Uninstall section in README documenting the approach
 
 ## Next Up
 
@@ -31,7 +36,7 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [ ] Tag v0.1 release
 
 ### Future ideas
-- [ ] `uninstall.sh` — Remove guardrails cleanly (restore backup)
+- [x] `uninstall.sh` — Surgical remove approach (done in v0.2)
 - [ ] Version check — Warn if installed config is outdated vs repo
 - [ ] CI test — GitHub Action that runs install.sh in a container to verify it works
 - [ ] Homebrew / npx distribution — `npx claude-guardrails install`
