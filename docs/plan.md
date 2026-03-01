@@ -38,7 +38,7 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 ### Future ideas
 - [x] `uninstall.sh` — Surgical remove approach (done in v0.2)
 - [ ] Version check — Warn if installed config is outdated vs repo
-- [ ] CI test — GitHub Action that runs install.sh in a container to verify it works
+- [x] CI test — GitHub Action that runs install.sh in a container to verify it works
 - [ ] Homebrew / npx distribution — `npx claude-guardrails install`
 - [ ] Per-project install mode — Write to `.claude/settings.local.json` instead of global
 - [ ] Hook test suite — Automated tests that verify each hook blocks what it should

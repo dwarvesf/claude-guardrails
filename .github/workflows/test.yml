@@ -1,0 +1,16 @@
+name: Test install/uninstall
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        scenario: [lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get install -y jq
+      - name: Run test
+        run: bash tests/ci-test.sh "${{ matrix.scenario }}"

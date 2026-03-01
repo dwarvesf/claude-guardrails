@@ -11,7 +11,7 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 | | **Lite** | **Full** |
 |---|---|---|
 | **Use when** | Internal/trusted projects | Open source repos, untrusted codebases, production credentials |
-| Credential deny rules | 15 rules (SSH, AWS, .env, .pem, etc.) | 22 rules (adds GnuPG, secrets dirs, shell profiles, etc.) |
+| Credential deny rules | 15 rules (SSH, AWS, .env, .pem, etc.) | 28 rules (adds GnuPG, secrets dirs, shell profiles, etc.) |
 | PreToolUse hooks | 3 (destructive deletes, direct push, pipe-to-shell) | 5 (adds data exfiltration, permission escalation) |
 | PostToolUse prompt injection scanner | No | Yes (`prompt-injection-defender.sh`) |
 | CLAUDE.md security rules | Yes | Yes |
