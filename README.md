@@ -18,28 +18,32 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 | Sandbox guidance | Mentioned | Full walkthrough |
 | **Prereqs** | `jq` | `jq` |
 
-## Quick Start (Lite)
+## Quick Start
 
 ```bash
-# 1. Install jq if you don't have it
+# Install jq if you don't have it
 brew install jq          # macOS
 # sudo apt install jq    # Debian/Ubuntu
 
-# 2. Copy settings (or merge if you have existing config)
-mkdir -p ~/.claude
-cp lite/settings.json ~/.claude/settings.json
+# Lite (3 hooks, 15 deny rules — for trusted projects)
+./install.sh
 
-# 3. Paste lite/CLAUDE-security-section.md into ~/.claude/CLAUDE.md
-
-# 4. Verify — start a new Claude Code session and try:
-#    cat ~/.ssh/id_rsa   → denied
-#    rm -rf /            → blocked by hook
-#    git push origin main → blocked by hook
+# Full (5 hooks + prompt injection scanner — for untrusted codebases)
+./install.sh full
 ```
 
-For the full variant (with prompt injection defender and all 5 hooks), see [`full/SETUP.md`](full/SETUP.md).
+The script merges into your existing `~/.claude/settings.json` (backing it up first) and is safe to run repeatedly.
 
-> **Existing config?** Don't overwrite — merge the `permissions.deny` and `hooks.PreToolUse` entries into your existing `~/.claude/settings.json` manually.
+<details>
+<summary>Manual installation</summary>
+
+If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step-by-step instructions. The key steps are:
+
+1. Copy the variant's `settings.json` to `~/.claude/settings.json` (or merge `permissions.deny` and `hooks.PreToolUse` arrays into your existing config)
+2. Append the variant's `CLAUDE-security-section.md` to `~/.claude/CLAUDE.md`
+3. (Full only) Copy `prompt-injection-defender.sh` to `~/.claude/hooks/prompt-injection-defender/` and add the `PostToolUse` hook entry to settings
+
+</details>
 
 ## How It Works
 
@@ -54,6 +58,22 @@ Five layers, each covering gaps the others miss:
 No single layer is sufficient. That's the point.
 
 See [`full/SETUP.md`](full/SETUP.md) for detailed explanations of each layer and their limitations.
+
+## Known Tradeoffs
+
+These guardrails trade convenience for safety. Be aware of what you're signing up for:
+
+**False positives will interrupt your workflow.** The glob patterns are intentionally broad. `Read **/*.key` blocks all `.key` files — including legitimate ones like `translation.key` or `config.key`. `Read **/*secret*` (full) blocks files like `secret_santa.py`. `rm -rf` hook triggers on cleaning build directories (`rm -rf dist/`). When this happens, you'll need to run the command manually or temporarily adjust the rule.
+
+**Deny rules only cover Claude's built-in tools, not bash.** `Read ~/.ssh/id_rsa` is denied, but `bash cat ~/.ssh/id_rsa` is not. The hooks catch some bash patterns, but they can't catch everything. This is a fundamental limitation of pattern matching — the OS-level sandbox (`/sandbox`) is the only real enforcement layer.
+
+**Hooks add latency to every Bash call.** Each PreToolUse hook spawns a subshell, pipes through `jq`, and runs `grep`. With 3 hooks (lite) that's 3 extra processes per Bash tool call. With 5 hooks + PostToolUse scanner (full), it's 6. Noticeable on slower machines or rapid-fire commands.
+
+**The prompt injection scanner is noisy.** It pattern-matches strings like "ignore previous instructions" and "system prompt:" — which appear in legitimate security docs, CTF writeups, and this README. Expect warnings when reading security-related content. It warns but doesn't block, so the cost is distraction rather than breakage.
+
+**Full variant overrides some global settings.** `full/settings.json` sets `alwaysThinkingEnabled: true` and `cleanupPeriodDays: 90`. The merge in `install.sh` uses jq's `*` operator, so these will overwrite your existing values for those keys. Review the diff after install if you have custom global settings.
+
+**No easy per-file exceptions.** If you legitimately need Claude to read a `.env.example` or a test `.pem` file, there's no allowlist mechanism. You either remove the deny rule, use bash to read the file, or copy the file to a non-matching path. This is a gap in Claude Code's permission model, not something we can fix here.
 
 ## Untrusted Repos
 
