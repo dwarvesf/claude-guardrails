@@ -1,0 +1,87 @@
+{
+  "$schema": "https://claude.ai/schemas/claude-code-settings.json",
+  "cleanupPeriodDays": 90,
+  "enableAllProjectMcpServers": false,
+  "alwaysThinkingEnabled": true,
+  "permissions": {
+    "deny": [
+      "Read ~/.ssh/**",
+      "Read ~/.aws/**",
+      "Read ~/.gnupg/**",
+      "Read ~/.config/gcloud/**",
+      "Read ~/.docker/config.json",
+      "Read **/.env",
+      "Read **/.env.*",
+      "Read **/.envrc",
+      "Read **/secrets/**",
+      "Read **/*.pem",
+      "Read **/*.key",
+      "Read **/*secret*",
+      "Read **/*credential*",
+      "Read ~/.claude/settings.json",
+      "Read ~/.claude/settings.local.json",
+      "Read ~/.npmrc",
+      "Read ~/.pypirc",
+      "Read ~/.netrc",
+      "Read ~/.git-credentials",
+      "Edit ~/.bashrc",
+      "Edit ~/.zshrc",
+      "Edit ~/.bash_profile",
+      "Edit ~/.zprofile",
+      "Edit ~/.profile",
+      "Edit ~/.claude/settings.json",
+      "Edit ~/.claude/settings.local.json",
+      "Edit **/.env",
+      "Edit **/.env.*"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"rm\\s+-(r|f|rf|fr)\\s+(/|~|\\$HOME)\"; then echo \"BLOCKED: Destructive delete detected. Use trash-cli or move to a temp directory instead.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"git\\s+push\\s+.*\\b(main|master|production)\\b\"; then echo \"BLOCKED: Direct push to main/master/production. Use a feature branch and PR.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"curl\\s.*\\|\\s*(bash|sh|zsh)|wget\\s.*\\|\\s*(bash|sh|zsh)|curl.*-o\\s*/tmp.*&&.*bash\"; then echo \"BLOCKED: Pipe-to-shell detected. Download first, inspect, then execute.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"(curl|wget|nc|ncat).*\\b(ngrok|burp|requestbin|pipedream|webhook\\.site|hookbin|canarytokens)\\b\"; then echo \"BLOCKED: Potential data exfiltration to external service.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"--dangerously-skip-permissions|--bypass-permissions\"; then echo \"BLOCKED: Cannot escalate permissions from within a session.\" >&2; exit 2; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

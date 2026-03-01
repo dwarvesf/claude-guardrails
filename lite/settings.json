@@ -1,0 +1,54 @@
+{
+  "$schema": "https://claude.ai/schemas/claude-code-settings.json",
+  "enableAllProjectMcpServers": false,
+  "permissions": {
+    "deny": [
+      "Read ~/.ssh/**",
+      "Read ~/.aws/**",
+      "Read ~/.gnupg/**",
+      "Read ~/.config/gcloud/**",
+      "Read ~/.docker/config.json",
+      "Read **/.env",
+      "Read **/.env.*",
+      "Read **/*.pem",
+      "Read **/*.key",
+      "Read ~/.npmrc",
+      "Read ~/.netrc",
+      "Read ~/.git-credentials",
+      "Edit ~/.claude/settings.json",
+      "Edit **/.env",
+      "Edit **/.env.*"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"rm\\s+-(r|f|rf|fr)\\s+(/|~|\\$HOME)\"; then echo \"BLOCKED: Destructive delete. Use trash or move to tmp instead.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"git\\s+push\\s+.*\\b(main|master|production)\\b\"; then echo \"BLOCKED: Direct push to protected branch. Use a feature branch and PR.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"curl\\s.*\\|\\s*(bash|sh|zsh)|wget\\s.*\\|\\s*(bash|sh|zsh)\"; then echo \"BLOCKED: Pipe-to-shell detected. Download first, inspect, then execute.\" >&2; exit 2; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}
