@@ -46,22 +46,10 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 
 ## Next Up
 
-### Polish & ship
-- [x] Test `install.sh` on clean `~/.claude/` (fresh install path)
-- [x] Test `install.sh` idempotency (run twice, verify no duplicates)
-- [x] Test `install.sh full` (prompt injection defender + PostToolUse hook)
-- [x] Test with pre-existing `settings.json` (merge path)
-- [x] Add `.gitignore` entry for `.DS_Store` if not already there
-- [ ] Commit install script + README changes
-- [ ] Tag v0.1 release
-
 ### Future ideas
-- [x] `uninstall.sh` — Surgical remove approach (done in v0.2)
 - [ ] Version check — Warn if installed config is outdated vs repo
-- [x] CI test — GitHub Action that runs install.sh in a container to verify it works
-- [x] Homebrew / npx distribution — `npx claude-guardrails install` (done in v0.3)
 - [ ] Per-project install mode — Write to `.claude/settings.local.json` instead of global
-- [ ] Hook test suite — Automated tests that verify each hook blocks what it should
+- [ ] Hook test suite — Automated tests that verify each hook blocks what it should (supersedes ad-hoc validation; see v0.4 WS1)
 - [ ] MCP server allowlist template — Starter config for common trusted servers
 
 ---
@@ -126,7 +114,7 @@ Lightweight process to stay current with threat research and Claude Code changes
 
 1. [ ] **Pattern test corpus** — Create fixtures + CI job for hook validation
 2. [ ] **Extract patterns to data files** — Separate data from code
-3. [ ] **Maintenance checklist** — `docs/maintenance.md` with upstream sources and review process
+3. [x] **Maintenance checklist** — `docs/maintenance.md` with upstream sources and review process (shipped in v0.3.2)
 4. [ ] **Allowlist support** — `~/.claude/guardrails-allow.json` for user-specific exceptions
 5. [ ] **Version compatibility check** — Warn if Claude Code version is untested
 6. [ ] **`update` command** — Pull latest patterns without full reinstall
