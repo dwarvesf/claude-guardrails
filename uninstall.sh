@@ -13,6 +13,8 @@
 # What gets removed:
 #   - permissions.deny entries that match the variant's deny list
 #   - hooks.PreToolUse entries that match the variant's hook list
+#   - hooks.UserPromptSubmit entries for scan-secrets (both variants)
+#   - ~/.claude/hooks/scan-secrets/ directory (both variants)
 #   - hooks.PostToolUse entries (full only — prompt injection defender)
 #   - ~/.claude/hooks/prompt-injection-defender/ directory (full only)
 #   - "# Security Rules" section from ~/.claude/CLAUDE.md
@@ -84,6 +86,26 @@ HOOKS_REMOVED=$(jq '.hooks.PreToolUse | length' "$VARIANT_SETTINGS")
 echo "  Removed $DENY_REMOVED deny rules"
 echo "  Removed $HOOKS_REMOVED PreToolUse hooks"
 
+# --- Both variants: remove UserPromptSubmit hook + scan-secrets script ---
+
+# Remove UserPromptSubmit entries that reference scan-secrets
+jq '
+  .hooks.UserPromptSubmit = (
+    [.hooks.UserPromptSubmit // [] | .[] |
+      select(.hooks | map(.command // "" | test("scan-secrets")) | any | not)]
+  ) |
+  if .hooks.UserPromptSubmit == [] then .hooks |= del(.UserPromptSubmit) else . end |
+  if .hooks == {} then del(.hooks) else . end
+' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+echo "  Removed UserPromptSubmit hook entry"
+
+# Remove the scan-secrets script directory
+SCAN_DIR="$CLAUDE_DIR/hooks/scan-secrets"
+if [[ -d "$SCAN_DIR" ]]; then
+  rm -rf "$SCAN_DIR"
+  echo "  Deleted ~/.claude/hooks/scan-secrets/"
+fi
+
 # --- Full only: remove PostToolUse hook + defender script ---
 
 if [[ "$VARIANT" == "full" ]]; then
@@ -104,12 +126,12 @@ if [[ "$VARIANT" == "full" ]]; then
     rm -rf "$HOOK_DIR"
     echo "  Deleted ~/.claude/hooks/prompt-injection-defender/"
   fi
+fi
 
-  # Clean up empty hooks directory
-  if [[ -d "$CLAUDE_DIR/hooks" ]] && [ -z "$(ls -A "$CLAUDE_DIR/hooks")" ]; then
-    rmdir "$CLAUDE_DIR/hooks"
-    echo "  Removed empty ~/.claude/hooks/ directory"
-  fi
+# Clean up empty hooks directory (both variants may leave it empty)
+if [[ -d "$CLAUDE_DIR/hooks" ]] && [ -z "$(ls -A "$CLAUDE_DIR/hooks")" ]; then
+  rmdir "$CLAUDE_DIR/hooks"
+  echo "  Removed empty ~/.claude/hooks/ directory"
 fi
 
 # --- Remove Security Rules section from CLAUDE.md ---

@@ -13,6 +13,7 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 | **Use when** | Internal/trusted projects | Open source repos, untrusted codebases, production credentials |
 | Credential deny rules | 15 rules (SSH, AWS, .env, .pem, etc.) | 28 rules (adds GnuPG, secrets dirs, shell profiles, etc.) |
 | PreToolUse hooks | 3 (destructive deletes, direct push, pipe-to-shell) | 5 (adds data exfiltration, permission escalation) |
+| UserPromptSubmit inbound secret scanner | Yes (`scan-secrets.sh`) | Yes (`scan-secrets.sh`) |
 | PostToolUse prompt injection scanner | No | Yes (`prompt-injection-defender.sh`) |
 | CLAUDE.md security rules | Yes | Yes |
 | Sandbox guidance | Mentioned | Full walkthrough |
@@ -53,7 +54,8 @@ If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step
 
 1. Copy the variant's `settings.json` to `~/.claude/settings.json` (or merge `permissions.deny` and `hooks.PreToolUse` arrays into your existing config)
 2. Append the variant's `CLAUDE-security-section.md` to `~/.claude/CLAUDE.md`
-3. (Full only) Copy `prompt-injection-defender.sh` to `~/.claude/hooks/prompt-injection-defender/` and add the `PostToolUse` hook entry to settings
+3. Copy `scan-secrets.sh` to `~/.claude/hooks/scan-secrets/` and add the `UserPromptSubmit` hook entry to settings
+4. (Full only) Copy `prompt-injection-defender.sh` to `~/.claude/hooks/prompt-injection-defender/` and add the `PostToolUse` hook entry to settings
 
 </details>
 
@@ -83,13 +85,14 @@ A pre-uninstall backup is saved to `~/.claude/settings.json.pre-uninstall` in ca
 
 ## How It Works
 
-Five layers, each covering gaps the others miss:
+Six layers, each covering gaps the others miss:
 
 1. **Permission deny rules** — Block Claude's Read/Edit tools from touching sensitive paths (SSH keys, .env, credentials). _Limitation: `bash cat` bypasses these._
 2. **PreToolUse hooks** — Block dangerous bash commands before execution (destructive deletes, direct pushes, pipe-to-shell). _Limitation: pattern-based, obfuscation can bypass._
-3. **OS-level sandbox** (`/sandbox`) — Filesystem and network isolation at the OS level. The only layer bash can't bypass. _Must be enabled per-session._
-4. **PostToolUse prompt injection scanner** (full only) — Scans Read/WebFetch/Bash outputs for injection patterns. Warns but doesn't block to avoid false positives.
-5. **CLAUDE.md security rules** — Natural language instructions telling Claude to avoid hardcoded secrets, treat external content as untrusted, etc.
+3. **UserPromptSubmit secret scanner** — `scan-secrets.sh` (bash + jq) blocks prompts containing live credentials (AWS keys, GitHub tokens, Anthropic keys, PEM blocks, BIP39 phrases). Prevents pasted secrets from being persisted to the session transcript on disk.
+4. **OS-level sandbox** (`/sandbox`) — Filesystem and network isolation at the OS level. The only layer bash can't bypass. _Must be enabled per-session._
+5. **PostToolUse prompt injection scanner** (full only) — Scans Read/WebFetch/Bash outputs for injection patterns. Warns but doesn't block to avoid false positives.
+6. **CLAUDE.md security rules** — Natural language instructions telling Claude to avoid hardcoded secrets, treat external content as untrusted, etc.
 
 No single layer is sufficient. That's the point.
 

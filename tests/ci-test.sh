@@ -103,6 +103,10 @@ get_post_hook_count() {
   jq '.hooks.PostToolUse // [] | length' "$SETTINGS"
 }
 
+get_prompt_hook_count() {
+  jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS"
+}
+
 clean_claude_dir() {
   if [[ -z "${CI:-}" ]]; then
     echo "Error: refusing to delete ~/.claude outside CI. Set CI=true to override."
@@ -130,6 +134,9 @@ test_lite_fresh() {
   assert_file_exists "$SETTINGS" "settings.json created"
   assert_eq "$(get_deny_count)" "15" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
+  assert_file_exists "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script exists"
+  assert_file_executable "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script is executable"
   assert_file_exists "$CLAUDE_MD" "CLAUDE.md created"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md contains Security Rules heading"
 
@@ -146,8 +153,11 @@ test_full_fresh() {
   assert_eq "$(get_deny_count)" "28" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
   assert_file_exists "$CLAUDE_DIR/hooks/prompt-injection-defender/prompt-injection-defender.sh" "defender script exists"
   assert_file_executable "$CLAUDE_DIR/hooks/prompt-injection-defender/prompt-injection-defender.sh" "defender script is executable"
+  assert_file_exists "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script exists"
+  assert_file_executable "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script is executable"
   assert_file_exists "$CLAUDE_MD" "CLAUDE.md created"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md contains Security Rules heading"
 
@@ -163,6 +173,7 @@ test_lite_idempotent() {
 
   assert_eq "$(get_deny_count)" "15" "deny rule count after double install"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count after double install"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md still contains Security Rules"
 
   finish
@@ -177,11 +188,14 @@ test_lite_roundtrip() {
   # Sanity check install worked
   assert_eq "$(get_deny_count)" "15" "deny count after install"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse count after install"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
   bash "$REPO_DIR/uninstall.sh" lite
 
   assert_eq "$(jq '.permissions.deny // [] | length' "$SETTINGS")" "0" "deny count after uninstall"
   assert_eq "$(jq '.hooks.PreToolUse // [] | length' "$SETTINGS")" "0" "PreToolUse count after uninstall"
+  assert_eq "$(jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS")" "0" "UserPromptSubmit count after uninstall"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-secrets" "scan-secrets dir removed"
   # CLAUDE.md should be deleted (was only security rules)
   assert_file_not_exists "$CLAUDE_MD" "CLAUDE.md removed (was empty)"
 
@@ -197,12 +211,15 @@ test_full_roundtrip() {
   # Sanity check install worked
   assert_eq "$(get_deny_count)" "28" "deny count after install"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse count after install"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
   bash "$REPO_DIR/uninstall.sh" full
 
   assert_eq "$(jq '.permissions.deny // [] | length' "$SETTINGS")" "0" "deny count after uninstall"
   assert_eq "$(jq '.hooks.PreToolUse // [] | length' "$SETTINGS")" "0" "PreToolUse count after uninstall"
+  assert_eq "$(jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS")" "0" "UserPromptSubmit count after uninstall"
   assert_dir_not_exists "$CLAUDE_DIR/hooks/prompt-injection-defender" "defender dir removed"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-secrets" "scan-secrets dir removed"
   # CLAUDE.md should be deleted (was only security rules)
   assert_file_not_exists "$CLAUDE_MD" "CLAUDE.md removed (was empty)"
 
@@ -219,6 +236,7 @@ test_full_idempotent() {
   assert_eq "$(get_deny_count)" "28" "deny count after double install"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count after double install"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count after double install"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md still contains Security Rules"
 
   finish
@@ -267,6 +285,7 @@ EOF
 
   assert_eq "$(get_deny_count)" "16" "deny count after install (15 + 1 custom)"
   assert_eq "$(get_pre_hook_count)" "4" "hook count after install (3 + 1 custom)"
+  assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
   assert_grep "$CLAUDE_MD" "# My Project Rules" "CLAUDE.md custom content preserved after install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md security section appended after install"
 
@@ -275,6 +294,7 @@ EOF
 
   assert_eq "$(jq '.permissions.deny // [] | length' "$SETTINGS")" "1" "deny count after uninstall (custom preserved)"
   assert_eq "$(jq '.hooks.PreToolUse // [] | length' "$SETTINGS")" "1" "hook count after uninstall (custom preserved)"
+  assert_eq "$(jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS")" "0" "UserPromptSubmit removed after uninstall"
 
   # Verify it's actually the custom entries
   assert_eq "$(jq -r '.permissions.deny[0]' "$SETTINGS")" "Read ~/my-custom-secret.txt" "custom deny rule preserved"

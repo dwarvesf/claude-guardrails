@@ -17,8 +17,8 @@ Claude Code can read your codebase, execute shell commands, fetch URLs, and chai
 ```
 claude-code-security/
 |-- settings.json                        # Global settings with deny rules + hooks
-|-- hooks/
-|   |-- prompt-injection-defender.sh     # PostToolUse hook scanning for injection
+|-- scan-secrets.sh                      # UserPromptSubmit hook: blocks pasted credentials
+|-- prompt-injection-defender.sh         # PostToolUse hook scanning for injection
 |-- CLAUDE-security-section.md           # Security rules to merge into your CLAUDE.md
 |-- SETUP.md                             # This file
 ```
@@ -49,7 +49,37 @@ If you already have one, you need to MERGE manually. The critical sections are:
 
 Do NOT just overwrite your existing file if you have custom settings.
 
-### Step 3: Install Prompt Injection Defender Hook
+### Step 3: Install scan-secrets UserPromptSubmit Hook
+
+```bash
+mkdir -p ~/.claude/hooks/scan-secrets
+cp scan-secrets.sh ~/.claude/hooks/scan-secrets/
+chmod +x ~/.claude/hooks/scan-secrets/scan-secrets.sh
+```
+
+Then add the UserPromptSubmit hook entry to your `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scan-secrets/scan-secrets.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This hook scans every prompt you submit for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, etc.) and blocks submission if a pattern matches. The prompt never reaches the model and is never persisted to the session transcript at `~/.claude/projects/.../*.jsonl`. Pure bash + jq — no additional runtime required beyond the `jq` you already installed for the PreToolUse hooks.
+
+### Step 4: Install Prompt Injection Defender Hook
 
 ```bash
 mkdir -p ~/.claude/hooks/prompt-injection-defender
@@ -77,7 +107,7 @@ Then add the PostToolUse hook entry to your `~/.claude/settings.json`:
 }
 ```
 
-### Step 4: Merge Security Section into CLAUDE.md
+### Step 5: Merge Security Section into CLAUDE.md
 
 Open your `~/.claude/CLAUDE.md` and paste the contents of `CLAUDE-security-section.md` as a section. If you're using the vibe coding learning method CLAUDE.md from the earlier setup, your file should look like:
 
@@ -91,7 +121,7 @@ Open your `~/.claude/CLAUDE.md` and paste the contents of `CLAUDE-security-secti
 # (any other sections you have)
 ```
 
-### Step 5: Enable Sandbox (Every Session)
+### Step 6: Enable Sandbox (Every Session)
 
 In your first Claude Code session, run:
 
@@ -103,7 +133,7 @@ This enables OS-level filesystem and network isolation. On macOS it uses Seatbel
 
 You must do this per-session. Check the status line to verify it's active.
 
-### Step 6: Verify
+### Step 7: Verify
 
 Start a new Claude Code session and test:
 
@@ -147,13 +177,19 @@ Enforces filesystem and network restrictions at the OS level. Bash commands cann
 
 **Limitation:** Must be enabled per-session. If you forget, you're running without it.
 
-### Layer 4: PostToolUse Prompt Injection Defender
+### Layer 4: UserPromptSubmit Secret Scanner (`scan-secrets.sh`)
+
+Runs on every prompt you submit. Regex-matches high-confidence credential patterns (AWS access keys, GitHub/Anthropic/OpenAI/Stripe/Slack tokens, PEM private-key headers, BIP39 mnemonic phrases, hex private keys, generic `API_KEY=value` assignments) and blocks the prompt from reaching the model if any match. The prompt is also never persisted to the session transcript (`~/.claude/projects/.../*.jsonl`), so a pasted credential that triggers the block does not end up on disk.
+
+**Limitation:** Regex. Novel credential formats will miss, and the generic-assignment pattern can miss values under 16 chars. Rotates must still be done manually — the hook blocks the paste but cannot invalidate what was leaked.
+
+### Layer 5: PostToolUse Prompt Injection Defender
 
 Scans outputs of Read, WebFetch, and Bash tools for known prompt injection patterns ("ignore previous instructions", "you are now", etc.). Warns Claude in-context but does not block.
 
 **Limitation:** Pattern-based, not semantic. Novel injection techniques will get through. But it catches the obvious attacks and raises Claude's awareness.
 
-### Layer 5: CLAUDE.md Security Rules
+### Layer 6: CLAUDE.md Security Rules
 
 Natural language instructions that tell Claude what to avoid (hardcoded secrets, plain text passwords, missing input validation, etc.) and how to treat external content as untrusted.
 

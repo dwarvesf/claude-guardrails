@@ -16,6 +16,7 @@ Two variants are provided:
 
 Each variant contains:
 - `settings.json` — Claude Code global settings with `permissions.deny` rules (blocking Read/Edit on sensitive paths like SSH keys, AWS creds, .env files) and `hooks.PreToolUse` entries (blocking dangerous bash patterns before execution)
+- `scan-secrets.sh` — UserPromptSubmit hook (bash + jq) that regex-scans prompts for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases) and blocks submission before the prompt reaches the model or is persisted to the session transcript. Uses jq's Oniguruma regex engine for lookbehind support — no extra runtime required.
 - `CLAUDE-security-section.md` — Security rules to merge into a user's `~/.claude/CLAUDE.md`
 - `SETUP.md` — Installation and usage guide
 
@@ -24,7 +25,7 @@ Full variant additionally includes:
 
 ## Key Design Decisions
 
-- **Hooks require `jq`** — All PreToolUse hooks parse JSON input via `jq`. This is a prerequisite for installation.
+- **Hooks require `jq`** — PreToolUse hooks parse JSON input via `jq`; `scan-secrets.sh` uses jq's regex engine for pattern matching. This is the sole prerequisite for installation.
 - **Defense in depth** — No single layer is sufficient. Deny rules only cover Claude's built-in tools (bash can bypass). Hooks are pattern-based (obfuscation can bypass). The sandbox (`/sandbox`) is the only OS-level enforcement but must be enabled per-session.
 - **Warn, don't block** for prompt injection — The PostToolUse defender outputs warnings as JSON messages rather than blocking, to avoid false positives on legitimate content.
 - **Settings must be merged, not replaced** — Users with existing `~/.claude/settings.json` must manually merge deny rules and hooks to avoid overwriting their config.

@@ -51,10 +51,14 @@ if [[ -f "$SETTINGS" ]]; then
     .hooks.PreToolUse = (
       [($existing.hooks.PreToolUse // [])[], ($new.hooks.PreToolUse // [])[]]
       | unique
+    ) |
+    .hooks.UserPromptSubmit = (
+      [($existing.hooks.UserPromptSubmit // [])[], ($new.hooks.UserPromptSubmit // [])[]]
+      | unique
     )
   ' "$SETTINGS.backup" "$VARIANT_DIR/settings.json" > "$SETTINGS.tmp" \
     && mv "$SETTINGS.tmp" "$SETTINGS"
-  echo "  Merged settings.json (deny rules + PreToolUse hooks deduplicated)"
+  echo "  Merged settings.json (deny rules + hooks deduplicated)"
 else
   cp "$VARIANT_DIR/settings.json" "$SETTINGS"
   echo "  Created settings.json"
@@ -71,6 +75,25 @@ else
   { echo ""; cat "$SECURITY_SECTION"; } >> "$CLAUDE_MD"
   echo "  Appended security rules to CLAUDE.md"
 fi
+
+# --- Both variants: scan-secrets UserPromptSubmit hook ---
+
+SCAN_DIR="$CLAUDE_DIR/hooks/scan-secrets"
+mkdir -p "$SCAN_DIR"
+cp "$VARIANT_DIR/scan-secrets.sh" "$SCAN_DIR/scan-secrets.sh"
+chmod +x "$SCAN_DIR/scan-secrets.sh"
+echo "  Installed scan-secrets.sh → ~/.claude/hooks/scan-secrets/"
+
+# Merge UserPromptSubmit hook entry into settings.json
+PROMPT_HOOK='[{"hooks":[{"type":"command","command":"~/.claude/hooks/scan-secrets/scan-secrets.sh","timeout":5}]}]'
+
+jq --argjson hook "$PROMPT_HOOK" '
+  .hooks.UserPromptSubmit = (
+    [(.hooks.UserPromptSubmit // [])[], $hook[]]
+    | unique
+  )
+' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+echo "  Added UserPromptSubmit hook to settings.json"
 
 # --- Full only: prompt injection defender ---
 
@@ -100,8 +123,10 @@ echo "Done! Summary:"
 echo "  Variant:    $VARIANT"
 DENY_COUNT=$(jq '.permissions.deny | length' "$SETTINGS")
 PRE_COUNT=$(jq '.hooks.PreToolUse | length' "$SETTINGS")
+PROMPT_COUNT=$(jq '.hooks.UserPromptSubmit | length' "$SETTINGS")
 echo "  Deny rules: $DENY_COUNT"
 echo "  PreToolUse hooks: $PRE_COUNT"
+echo "  UserPromptSubmit hooks: $PROMPT_COUNT (inbound secret scanner)"
 if [[ "$VARIANT" == "full" ]]; then
   POST_COUNT=$(jq '.hooks.PostToolUse | length' "$SETTINGS")
   echo "  PostToolUse hooks: $POST_COUNT (prompt injection scanner)"

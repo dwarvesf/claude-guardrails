@@ -4,7 +4,8 @@ Minimal security config for daily dev work. Three layers, near-zero friction.
 
 ## What's In Here
 
-- `settings.json` - Credential deny rules + 3 hooks
+- `settings.json` - Credential deny rules + 3 PreToolUse hooks
+- `scan-secrets.sh` - UserPromptSubmit hook that blocks pasted credentials
 - `CLAUDE-security-section.md` - Security rules to paste into your CLAUDE.md
 
 ## What It Blocks
@@ -16,10 +17,14 @@ Minimal security config for daily dev work. Three layers, near-zero friction.
 - npm/pip/git credentials
 - Claude's own settings
 
-**Hooks (Bash commands):**
+**PreToolUse hooks (Bash commands):**
 - `rm -rf /` and similar destructive deletes
 - `git push origin main/master/production` (use feature branches)
 - `curl ... | bash` pipe-to-shell patterns
+
+**UserPromptSubmit hook (your typed prompts):**
+- Live credentials pasted into the prompt (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, `API_KEY=value` assignments)
+- Blocks submission so the secret never hits the model or the on-disk session transcript
 
 **That's it.** No prompt injection scanner, no exfiltration detector, no PostToolUse hooks. Those add noise for internal projects where you trust the codebase.
 

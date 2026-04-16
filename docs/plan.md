@@ -31,6 +31,15 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] Updated README Quick Start to lead with `npx claude-guardrails install`
 - [x] Updated README Uninstall to lead with `npx claude-guardrails uninstall`
 
+### v0.3.1 — scan-secrets UserPromptSubmit hook (both variants)
+- [x] `full/scan-secrets.sh` + `lite/scan-secrets.sh` — bash + jq scanner for pasted credentials (AWS, GitHub, Anthropic, OpenAI, Google, Slack, Stripe, 1Password, PEM blocks, BIP39 phrases, 64-hex private keys, `API_KEY=value` assignments). All regex matching runs inside jq's Oniguruma engine — no Python, no Perl, no grep -P.
+- [x] Installs to `~/.claude/hooks/scan-secrets/scan-secrets.sh` with `UserPromptSubmit` hook entry (`timeout: 5s`)
+- [x] `install.sh` — copies script, merges hook via jq. No new dependency beyond jq (already required).
+- [x] `uninstall.sh` — removes hook entry + directory, cleans up empty `~/.claude/hooks/`
+- [x] CI tests updated: 7 scenarios now assert UserPromptSubmit count and script presence/removal
+- [x] Benchmarks: ~11 ms median per invocation (vs ~22 ms for the earlier Python prototype)
+- [x] Docs updated: README (comparison table, 6-layer overview, manual-install steps), `full/SETUP.md` (new Step 3 + Layer 4), `lite/SETUP.md` (new entries), `CLAUDE.md` (architecture section), `docs/maintenance.md` (new quarterly review section)
+
 ## Next Up
 
 ### Polish & ship
