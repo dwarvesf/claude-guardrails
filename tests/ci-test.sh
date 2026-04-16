@@ -1,13 +1,38 @@
 #!/usr/bin/env bash
 # ci-test.sh — CI test runner for install/uninstall scenarios
 # Usage: bash tests/ci-test.sh <scenario>
+#
+# Safety: this script ALWAYS runs with HOME overridden to a fresh temp dir.
+# install.sh and uninstall.sh resolve ~/.claude via $HOME, so the tests
+# cannot touch a real user home directory. There is no env-var escape hatch.
 set -euo pipefail
 
 SCENARIO="${1:?Usage: ci-test.sh <scenario>}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# --- Isolate HOME to a temp directory ---
+# Create a throwaway $HOME for this test run. install.sh reads $HOME, so
+# redirecting it here is sufficient to sandbox every file operation.
+TEST_HOME="$(mktemp -d -t claude-guardrails-test.XXXXXX)"
+export HOME="$TEST_HOME"
+
+# Defence in depth: abort if $HOME ever resolves to anything that looks like
+# a real user home (prevents regressions if someone refactors this file).
+case "$HOME" in
+  /Users/*|/home/*|/root)
+    echo "FATAL: refusing to run with HOME=$HOME (looks like a real user home)"
+    exit 1
+    ;;
+esac
+
+cleanup() { rm -rf "$TEST_HOME"; }
+trap cleanup EXIT
+
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+
+echo "Sandboxed HOME: $TEST_HOME"
 
 # --- Helpers ---
 
@@ -108,10 +133,9 @@ get_prompt_hook_count() {
 }
 
 clean_claude_dir() {
-  if [[ -z "${CI:-}" ]]; then
-    echo "Error: refusing to delete ~/.claude outside CI. Set CI=true to override."
-    exit 1
-  fi
+  # Safe by construction: $CLAUDE_DIR lives inside $TEST_HOME (a mktemp dir)
+  # because we export HOME at script start. The case check above guarantees
+  # we never reach this line with a real user home.
   rm -rf "$CLAUDE_DIR"
 }
 

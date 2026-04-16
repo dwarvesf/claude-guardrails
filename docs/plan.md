@@ -40,6 +40,10 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] Benchmarks: ~11 ms median per invocation (vs ~22 ms for the earlier Python prototype)
 - [x] Docs updated: README (comparison table, 6-layer overview, manual-install steps), `full/SETUP.md` (new Step 3 + Layer 4), `lite/SETUP.md` (new entries), `CLAUDE.md` (architecture section), `docs/maintenance.md` (new quarterly review section)
 
+### v0.3.2 — CI test sandbox hardening (post-incident fix)
+- [x] `tests/ci-test.sh` — force `HOME` to a fresh `mktemp -d` at script start; defensive `case` check rejects real-home patterns (`/Users/*`, `/home/*`, `/root`); `trap EXIT` cleans up the temp dir; `CI=true` escape hatch removed
+- [x] Verified: all 7 scenarios pass (58/58 assertions) under the new sandbox
+
 ## Next Up
 
 ### Polish & ship
