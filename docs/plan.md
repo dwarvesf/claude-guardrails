@@ -63,3 +63,70 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [ ] Per-project install mode — Write to `.claude/settings.local.json` instead of global
 - [ ] Hook test suite — Automated tests that verify each hook blocks what it should
 - [ ] MCP server allowlist template — Starter config for common trusted servers
+
+---
+
+## v0.4 — Maintainability & Sustainability
+
+### Problem
+
+The project has 5 areas that rot over time:
+
+| Area | What rots | Current count | Effort |
+|---|---|---|---|
+| Deny rule globs | New credential formats, new tools | 15 (lite) / 28 (full) | Medium |
+| PreToolUse hook regexes | New attack patterns, obfuscation | 3 (lite) / 5 (full) | Medium |
+| Prompt injection patterns | Novel injection techniques | 20 regexes in defender.sh | High |
+| Install/uninstall merge logic | Claude Code schema changes | install.sh + uninstall.sh | Low |
+| Docs (README, SETUP, CLAUDE.md) | Drift from actual behavior | 3 files | Low |
+
+No single layer is enough on its own, and patterns go stale without a process to update them.
+
+### Approach: 3 workstreams
+
+#### WS1 — Pattern test corpus (highest ROI)
+
+Create test fixtures that prove each hook/rule works and catch false positive regressions.
+
+- `tests/fixtures/should-block/` — inputs that MUST trigger hooks
+- `tests/fixtures/should-allow/` — inputs that MUST NOT trigger (false positive regression)
+- CI job that feeds fixtures through hooks and asserts correct behavior
+- Covers: PreToolUse hooks, deny rules validation, prompt injection defender
+
+Without this, every pattern change is "hope it works." With this, pattern updates are provably correct.
+
+#### WS2 — Extract patterns to data files
+
+Move regexes and globs out of JSON/shell and into plain-text data files:
+
+```
+patterns/
+  deny-paths.txt            # one glob per line
+  dangerous-commands.txt     # bash patterns for PreToolUse
+  injection-signatures.txt   # prompt injection regexes
+```
+
+Benefits:
+- PRs that add a pattern are 1-line diffs, not buried in JSON
+- Lower barrier for community contributions
+- Enables future `npx claude-guardrails update` (pull new patterns without reinstalling)
+- Install script reads from data files to build settings.json
+
+Tradeoff: adds build/generation step to install. Settings.json is no longer self-contained.
+
+#### WS3 — Upstream tracking & maintenance checklist
+
+Lightweight process to stay current with threat research and Claude Code changes.
+
+- `docs/maintenance.md` — Quarterly review checklist with upstream sources to watch
+- Version compatibility check in install script (warn on unknown Claude Code versions)
+- CHANGELOG.md to track what patterns were added/removed and why
+
+### Prioritized task list
+
+1. [ ] **Pattern test corpus** — Create fixtures + CI job for hook validation
+2. [ ] **Extract patterns to data files** — Separate data from code
+3. [ ] **Maintenance checklist** — `docs/maintenance.md` with upstream sources and review process
+4. [ ] **Allowlist support** — `~/.claude/guardrails-allow.json` for user-specific exceptions
+5. [ ] **Version compatibility check** — Warn if Claude Code version is untested
+6. [ ] **`update` command** — Pull latest patterns without full reinstall
