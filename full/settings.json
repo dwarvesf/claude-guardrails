@@ -3,11 +3,18 @@
   "cleanupPeriodDays": 90,
   "enableAllProjectMcpServers": false,
   "alwaysThinkingEnabled": true,
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
+  },
   "permissions": {
     "deny": [
       "Read ~/.ssh/**",
       "Read ~/.aws/**",
       "Read ~/.gnupg/**",
+      "Read ~/.kube/**",
+      "Read ~/.azure/**",
       "Read ~/.config/gcloud/**",
       "Read ~/.docker/config.json",
       "Read **/.env",
@@ -24,6 +31,12 @@
       "Read ~/.pypirc",
       "Read ~/.netrc",
       "Read ~/.git-credentials",
+      "Read ~/Library/Application Support/MetaMask/**",
+      "Read ~/Library/Application Support/Exodus/**",
+      "Read ~/Library/Application Support/Phantom/**",
+      "Read ~/Library/Application Support/Solflare/**",
+      "Read ~/Library/Application Support/Electrum/**",
+      "Read ~/.electrum/**",
       "Edit ~/.bashrc",
       "Edit ~/.zshrc",
       "Edit ~/.bash_profile",
@@ -32,7 +45,11 @@
       "Edit ~/.claude/settings.json",
       "Edit ~/.claude/settings.local.json",
       "Edit **/.env",
-      "Edit **/.env.*"
+      "Edit **/.env.*",
+      "Bash(sudo *)",
+      "Bash(mkfs *)",
+      "Bash(dd *)",
+      "Bash(rm -rf *)"
     ]
   },
   "hooks": {

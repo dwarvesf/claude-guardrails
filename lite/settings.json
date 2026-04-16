@@ -1,11 +1,18 @@
 {
   "$schema": "https://claude.ai/schemas/claude-code-settings.json",
   "enableAllProjectMcpServers": false,
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"
+  },
   "permissions": {
     "deny": [
       "Read ~/.ssh/**",
       "Read ~/.aws/**",
       "Read ~/.gnupg/**",
+      "Read ~/.kube/**",
+      "Read ~/.azure/**",
       "Read ~/.config/gcloud/**",
       "Read ~/.docker/config.json",
       "Read **/.env",
@@ -17,7 +24,11 @@
       "Read ~/.git-credentials",
       "Edit ~/.claude/settings.json",
       "Edit **/.env",
-      "Edit **/.env.*"
+      "Edit **/.env.*",
+      "Bash(sudo *)",
+      "Bash(mkfs *)",
+      "Bash(dd *)",
+      "Bash(rm -rf *)"
     ]
   },
   "hooks": {

@@ -11,12 +11,13 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 | | **Lite** | **Full** |
 |---|---|---|
 | **Use when** | Internal/trusted projects | Open source repos, untrusted codebases, production credentials |
-| Credential deny rules | 15 rules (SSH, AWS, .env, .pem, etc.) | 28 rules (adds GnuPG, secrets dirs, shell profiles, etc.) |
+| Credential deny rules | 21 rules (SSH, AWS, GPG, kube, Azure, .env, .pem, destructive Bash, etc.) | 40 rules (adds secrets dirs, shell profiles, crypto wallets, etc.) |
 | PreToolUse hooks | 3 (destructive deletes, direct push, pipe-to-shell) | 5 (adds data exfiltration, permission escalation) |
 | UserPromptSubmit inbound secret scanner | Yes (`scan-secrets.sh`) | Yes (`scan-secrets.sh`) |
 | PostToolUse prompt injection scanner | No | Yes (`prompt-injection-defender.sh`) |
+| Privacy env flags | Yes (telemetry, error reports, feedback survey off) | Yes |
 | CLAUDE.md security rules | Yes | Yes |
-| Sandbox guidance | Mentioned | Full walkthrough |
+| Sandbox guidance | Yes — this is the enforcement layer | Yes + devcontainer pointer |
 | **Prereqs** | `jq` | `jq` |
 
 ## Quick Start
@@ -85,16 +86,26 @@ A pre-uninstall backup is saved to `~/.claude/settings.json.pre-uninstall` in ca
 
 ## How It Works
 
-Six layers, each covering gaps the others miss:
+Pattern-based hooks and deny rules are defense in depth, not a security boundary. A sufficiently clever prompt injection can rephrase or obfuscate commands around any regex we ship. The layer that actually enforces restrictions against bash is the OS-level sandbox. Enable it every session, then treat everything else as a catch-net for the common, accidental, and obvious cases.
 
-1. **Permission deny rules** — Block Claude's Read/Edit tools from touching sensitive paths (SSH keys, .env, credentials). _Limitation: `bash cat` bypasses these._
-2. **PreToolUse hooks** — Block dangerous bash commands before execution (destructive deletes, direct pushes, pipe-to-shell). _Limitation: pattern-based, obfuscation can bypass._
-3. **UserPromptSubmit secret scanner** — `scan-secrets.sh` (bash + jq) blocks prompts containing live credentials (AWS keys, GitHub tokens, Anthropic keys, PEM blocks, BIP39 phrases). Prevents pasted secrets from being persisted to the session transcript on disk.
-4. **OS-level sandbox** (`/sandbox`) — Filesystem and network isolation at the OS level. The only layer bash can't bypass. _Must be enabled per-session._
-5. **PostToolUse prompt injection scanner** (full only) — Scans Read/WebFetch/Bash outputs for injection patterns. Warns but doesn't block to avoid false positives.
-6. **CLAUDE.md security rules** — Natural language instructions telling Claude to avoid hardcoded secrets, treat external content as untrusted, etc.
+### Sandboxing is the boundary
 
-No single layer is sufficient. That's the point.
+Run `/sandbox` at session start. Uses Seatbelt on macOS, bubblewrap on Linux. Writes are restricted to the working directory; network access is limited to allowed domains. This is the one layer `bash cat ~/.ssh/id_rsa` cannot escape, which is why our deny rules and hooks are strictly additive on top of it.
+
+For sessions reviewing untrusted code — unknown repos, open-source forks, contractor-submitted branches — step up to a container. Trail of Bits' [claude-code-devcontainer](https://github.com/trailofbits/claude-code-devcontainer) ships a Docker-based setup with optional iptables allowlists. We don't ship one in this repo yet; use theirs.
+
+### The guardrail layers (can be bypassed, still worth having)
+
+Defense-in-depth layers that catch what the sandbox doesn't need to. They do not stop a determined prompt injection:
+
+1. **Permission deny rules** — Block Claude's Read/Edit/Bash tools from touching sensitive paths and running obviously dangerous commands (SSH, AWS, GPG, kubeconfig, Azure, crypto wallets in `full`, plus `sudo`/`mkfs`/`dd`/`rm -rf` as Bash patterns). _Covers Claude's built-in tools; obfuscated bash can slip through._
+2. **PreToolUse hooks** — Pattern-match dangerous bash commands before execution (destructive deletes, direct pushes, pipe-to-shell). `full` adds data-exfiltration and permission-escalation patterns. _Pattern-based, obfuscation escapes._
+3. **UserPromptSubmit secret scanner** — `scan-secrets.sh` (bash + jq) blocks prompts containing live credentials (AWS keys, GitHub / Anthropic / OpenAI tokens, PEM blocks, BIP39 phrases). Prevents pasted secrets from reaching the model or landing in the on-disk session transcript.
+4. **PostToolUse prompt injection scanner** (`full` only) — Scans Read/WebFetch/Bash outputs for injection patterns. Warns in-context, doesn't block, so legitimate security content doesn't break.
+5. **CLAUDE.md security rules** — Natural-language instructions Claude usually follows (no hardcoded secrets, treat external content as untrusted, etc).
+6. **Privacy env flags** — Both variants set `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`, and `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`. We deliberately leave `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` unset — that flag also kills auto-updates, which silently strands you on an unpatched version.
+
+No single layer is sufficient. Stack them.
 
 See [`full/SETUP.md`](full/SETUP.md) for detailed explanations of each layer and their limitations.
 
@@ -104,7 +115,7 @@ These guardrails trade convenience for safety. Be aware of what you're signing u
 
 **False positives will interrupt your workflow.** The glob patterns are intentionally broad. `Read **/*.key` blocks all `.key` files — including legitimate ones like `translation.key` or `config.key`. `Read **/*secret*` (full) blocks files like `secret_santa.py`. `rm -rf` hook triggers on cleaning build directories (`rm -rf dist/`). When this happens, you'll need to run the command manually or temporarily adjust the rule.
 
-**Deny rules only cover Claude's built-in tools, not bash.** `Read ~/.ssh/id_rsa` is denied, but `bash cat ~/.ssh/id_rsa` is not. The hooks catch some bash patterns, but they can't catch everything. This is a fundamental limitation of pattern matching — the OS-level sandbox (`/sandbox`) is the only real enforcement layer.
+**Deny rules only cover Claude's built-in tools, not bash.** `Read ~/.ssh/id_rsa` is denied, but `bash cat ~/.ssh/id_rsa` is not. The hooks catch some bash patterns, but they can't catch everything. This is a fundamental limitation of pattern matching — see the "Sandboxing is the boundary" section above for why `/sandbox` is the layer that actually enforces.
 
 **Hooks add latency to every Bash call.** Each PreToolUse hook spawns a subshell, pipes through `jq`, and runs `grep`. With 3 hooks (lite) that's 3 extra processes per Bash tool call. With 5 hooks + PostToolUse scanner (full), it's 6. Noticeable on slower machines or rapid-fire commands.
 

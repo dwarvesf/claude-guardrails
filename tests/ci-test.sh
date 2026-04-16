@@ -156,7 +156,7 @@ test_lite_fresh() {
   bash "$REPO_DIR/install.sh" lite
 
   assert_file_exists "$SETTINGS" "settings.json created"
-  assert_eq "$(get_deny_count)" "15" "deny rule count"
+  assert_eq "$(get_deny_count)" "21" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
   assert_file_exists "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script exists"
@@ -174,7 +174,7 @@ test_full_fresh() {
   bash "$REPO_DIR/install.sh" full
 
   assert_file_exists "$SETTINGS" "settings.json created"
-  assert_eq "$(get_deny_count)" "28" "deny rule count"
+  assert_eq "$(get_deny_count)" "40" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
@@ -195,7 +195,7 @@ test_lite_idempotent() {
   bash "$REPO_DIR/install.sh" lite
   bash "$REPO_DIR/install.sh" lite
 
-  assert_eq "$(get_deny_count)" "15" "deny rule count after double install"
+  assert_eq "$(get_deny_count)" "21" "deny rule count after double install"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count after double install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md still contains Security Rules"
@@ -210,7 +210,7 @@ test_lite_roundtrip() {
   bash "$REPO_DIR/install.sh" lite
 
   # Sanity check install worked
-  assert_eq "$(get_deny_count)" "15" "deny count after install"
+  assert_eq "$(get_deny_count)" "21" "deny count after install"
   assert_eq "$(get_pre_hook_count)" "3" "PreToolUse count after install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
@@ -233,7 +233,7 @@ test_full_roundtrip() {
   bash "$REPO_DIR/install.sh" full
 
   # Sanity check install worked
-  assert_eq "$(get_deny_count)" "28" "deny count after install"
+  assert_eq "$(get_deny_count)" "40" "deny count after install"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse count after install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
@@ -257,7 +257,7 @@ test_full_idempotent() {
   bash "$REPO_DIR/install.sh" full
   bash "$REPO_DIR/install.sh" full
 
-  assert_eq "$(get_deny_count)" "28" "deny count after double install"
+  assert_eq "$(get_deny_count)" "40" "deny count after double install"
   assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count after double install"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count after double install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
@@ -307,7 +307,7 @@ EOF
   # Install lite on top of existing config
   bash "$REPO_DIR/install.sh" lite
 
-  assert_eq "$(get_deny_count)" "16" "deny count after install (15 + 1 custom)"
+  assert_eq "$(get_deny_count)" "22" "deny count after install (21 + 1 custom)"
   assert_eq "$(get_pre_hook_count)" "4" "hook count after install (3 + 1 custom)"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
   assert_grep "$CLAUDE_MD" "# My Project Rules" "CLAUDE.md custom content preserved after install"

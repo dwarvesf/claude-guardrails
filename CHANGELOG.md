@@ -2,6 +2,20 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.3] — 2026-04-17
+
+Alignment pass against [Trail of Bits' `claude-code-config`](https://github.com/trailofbits/claude-code-config) threat model and deny-rule coverage.
+
+### Added
+- **Privacy `env` flags in both variants** — `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`, `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`. Intentionally does **not** set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` because that flag also disables auto-updates.
+- **Broader credential deny coverage** — both variants add `~/.kube/**` (cluster bearer tokens) and `~/.azure/**` (Azure CLI creds). `full` adds six crypto-wallet app-support paths (MetaMask, Exodus, Phantom, Solflare, Electrum on macOS + `~/.electrum/**` on Linux).
+- **Redundant Bash deny rules** as belt-and-suspenders alongside the PreToolUse hooks: `Bash(sudo *)`, `Bash(mkfs *)`, `Bash(dd *)`, `Bash(rm -rf *)`.
+
+### Changed
+- Deny rule counts: **lite 15 → 21**, **full 28 → 40**.
+- README "How It Works" restructured so `/sandbox` leads as the enforcement boundary and the other layers are framed explicitly as "can be bypassed." Adds a devcontainer pointer to Trail of Bits' companion repo for untrusted-code review sessions.
+- CI test `get_deny_count()` expectations updated across all 7 scenarios; still 58/58 assertions green.
+
 ## [0.3.2] — 2026-04-17
 
 ### Added
