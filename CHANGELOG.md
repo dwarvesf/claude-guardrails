@@ -2,6 +2,22 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.8] - 2026-04-17
+
+Hotfix for v0.3.7. The wordlist-based BIP39 detector shipped in #9 replaced one false-positive regime with another: it tokenised prompts with `scan("\b[a-z]{3,8}\b")`, flattening punctuation out before counting runs, so any prose with 12+ BIP39 vocabulary words in a row got blocked. BIP39 wordlists include common English words (what, else, you, need, feel, that, ready, then, okay, ...), so a single user-reported sentence, "question. What else do you need? If you feel that's ready, then that's ready, okay.", tokenised to 13 wordlist hits and tripped the threshold.
+
+### Fixed
+
+- **`scan-secrets.sh` (both variants)** - the BIP39 pass now only flags runs of 12+ candidate tokens (3-8 lowercase letters) that are separated **solely by whitespace**, then confirms every token in the run is a wordlist member. Real mnemonics are space-separated in every wallet, so they still match; prose is broken up by punctuation, contractions, digits, or short words and no longer accumulates a run. Verified against the exact prompt the user reported: it now passes. Reported by @nntruonghan (#10).
+
+### Added
+
+- **Two `bip39-scan` CI cases** - 12 wordlist words joined by `", "` must pass (was the failing case), newline-wrapped 12-word mnemonic must still block. CI: 11 scenarios / 103 assertions -> 11 scenarios / 105 assertions.
+
+### Upgrade note
+
+Re-run `bash install.sh <variant>` (or `npx claude-guardrails install`) to pick up the new `scan-secrets.sh`. If you hit a BIP39 block on ordinary prose under v0.3.7, upgrading to v0.3.8 resolves it.
+
 ## [0.3.7] - 2026-04-17
 
 Replaces the BIP39 mnemonic detector. The previous pattern was `(?i)(^|\s)([a-z]{3,8}\s+){11}[a-z]{3,8}(\s|$)` — "12 or more consecutive lowercase words of 3-8 characters." Ordinary English prose hits that pattern routinely (30-plus short-word runs are common in natural writing), so scan-secrets.sh was blocking legitimate prompts. The regex was never a real BIP39 check; it was a short-word run detector with the wrong name.
