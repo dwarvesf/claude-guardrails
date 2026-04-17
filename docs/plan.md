@@ -44,6 +44,19 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] `tests/ci-test.sh` — force `HOME` to a fresh `mktemp -d` at script start; defensive `case` check rejects real-home patterns (`/Users/*`, `/home/*`, `/root`); `trap EXIT` cleans up the temp dir; `CI=true` escape hatch removed
 - [x] Verified: all 7 scenarios pass (58/58 assertions) under the new sandbox
 
+### v0.3.3 — Trail of Bits alignment pass
+- [x] Privacy env flags in both variants (telemetry, error reporting, feedback survey off)
+- [x] Broader credential deny coverage: `~/.kube/**`, `~/.azure/**`, six macOS/Linux wallet paths (full only)
+- [x] Redundant `Bash(sudo *)`, `Bash(mkfs *)`, `Bash(dd *)`, `Bash(rm -rf *)` deny rules alongside PreToolUse hooks
+- [x] Deny counts: lite 15 → 21, full 28 → 40
+
+### v0.3.4 — scan-commit PreToolUse hook + shared patterns file
+- [x] `scan-commit.sh` in both variants — intercepts `git commit` Bash calls, runs `git diff --cached -U0` through the shared secret regex set, blocks on match with pattern name(s) + staged file list. Word-boundary matcher avoids intercepting `git commit-tree`.
+- [x] `patterns/secrets.json` — single source of truth for credential regexes, loaded by both `scan-secrets.sh` and `scan-commit.sh` via `jq --slurpfile`. Closes WS2 for the secrets pattern set (injection signatures and dangerous-command patterns remain embedded).
+- [x] `install.sh` copies patterns + scan-commit; `uninstall.sh` removes `~/.claude/hooks/scan-commit/` and `~/.claude/hooks/patterns/`.
+- [x] CI suite 7 → 8 scenarios (58 → 76 assertions): adds `scan-commit` functional test covering 7 cases — clean allow, AWS key block, `git status` pass-through, `commit-tree` plumbing safety, `git add && git commit` chained form, heredoc-wrapped message, and fail-open when patterns file is missing.
+- [x] Docs updated: CHANGELOG, both SETUP.md, root CLAUDE.md.
+
 ## Next Up
 
 ### Future ideas
@@ -113,7 +126,7 @@ Lightweight process to stay current with threat research and Claude Code changes
 ### Prioritized task list
 
 1. [ ] **Pattern test corpus** — Create fixtures + CI job for hook validation
-2. [ ] **Extract patterns to data files** — Separate data from code
+2. [~] **Extract patterns to data files** — Secrets pattern extracted to `patterns/secrets.json` in v0.3.4. Still pending: `deny-paths.txt`, `dangerous-commands.txt`, `injection-signatures.txt`.
 3. [x] **Maintenance checklist** — `docs/maintenance.md` with upstream sources and review process (shipped in v0.3.2)
 4. [ ] **Allowlist support** — `~/.claude/guardrails-allow.json` for user-specific exceptions
 5. [ ] **Version compatibility check** — Warn if Claude Code version is untested

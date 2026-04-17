@@ -4,8 +4,9 @@ Minimal security config for daily dev work. Three layers, near-zero friction.
 
 ## What's In Here
 
-- `settings.json` - Credential deny rules + 3 PreToolUse hooks
+- `settings.json` - Credential deny rules + 4 PreToolUse hooks
 - `scan-secrets.sh` - UserPromptSubmit hook that blocks pasted credentials
+- `scan-commit.sh` - PreToolUse hook that blocks `git commit` on a staged diff containing credentials
 - `CLAUDE-security-section.md` - Security rules to paste into your CLAUDE.md
 
 ## What It Blocks
@@ -21,6 +22,7 @@ Minimal security config for daily dev work. Three layers, near-zero friction.
 - `rm -rf /` and similar destructive deletes
 - `git push origin main/master/production` (use feature branches)
 - `curl ... | bash` pipe-to-shell patterns
+- `git commit` when the staged diff contains a credential pattern (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, etc.) — same regex set as the prompt scanner
 
 **UserPromptSubmit hook (your typed prompts):**
 - Live credentials pasted into the prompt (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, `API_KEY=value` assignments)

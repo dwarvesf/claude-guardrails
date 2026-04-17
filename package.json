@@ -1,6 +1,6 @@
 {
   "name": "claude-guardrails",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Hardened security configuration for Claude Code — deny rules, hooks, and prompt injection defense out of the box",
   "bin": {
     "claude-guardrails": "bin/claude-guardrails"
@@ -9,6 +9,7 @@
     "bin/",
     "lite/",
     "full/",
+    "patterns/",
     "install.sh",
     "uninstall.sh",
     "README.md",
