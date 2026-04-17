@@ -454,6 +454,71 @@ EOF
   finish
 }
 
+test_schema_remediation() {
+  echo "=== schema-remediation: Installer flags and fixes pre-v0.3.5 bad \$schema ==="
+
+  # --- Case 1: existing settings carry the broken pre-v0.3.5 $schema ---
+  clean_claude_dir
+  mkdir -p "$CLAUDE_DIR"
+  cat > "$SETTINGS" <<'SEED'
+{
+  "$schema": "https://claude.ai/schemas/claude-code-settings.json",
+  "permissions": {
+    "deny": []
+  }
+}
+SEED
+
+  OUTPUT="$(bash "$REPO_DIR/install.sh" lite 2>&1)"
+
+  if echo "$OUTPUT" | grep -q "NOTICE — schema URL auto-corrected"; then
+    echo "  PASS: installer printed schema-remediation notice for broken existing schema"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: installer did not print notice when broken schema was present"
+    FAIL=$((FAIL + 1))
+  fi
+
+  assert_eq "$(get_schema)" "$EXPECTED_SCHEMA" "\$schema corrected after remediation merge"
+
+  # --- Case 2: fresh install with no existing settings must stay quiet ---
+  clean_claude_dir
+
+  OUTPUT="$(bash "$REPO_DIR/install.sh" lite 2>&1)"
+
+  if echo "$OUTPUT" | grep -q "NOTICE — schema URL auto-corrected"; then
+    echo "  FAIL: fresh install printed a spurious schema-remediation notice"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: fresh install does not print remediation notice"
+    PASS=$((PASS + 1))
+  fi
+
+  # --- Case 3: existing install already has the correct schema — also quiet ---
+  clean_claude_dir
+  mkdir -p "$CLAUDE_DIR"
+  cat > "$SETTINGS" <<'SEED'
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": []
+  }
+}
+SEED
+
+  OUTPUT="$(bash "$REPO_DIR/install.sh" lite 2>&1)"
+
+  if echo "$OUTPUT" | grep -q "NOTICE — schema URL auto-corrected"; then
+    echo "  FAIL: correct existing schema printed spurious notice"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: correct existing schema does not print remediation notice"
+    PASS=$((PASS + 1))
+  fi
+
+  finish
+}
+
 test_push_hook() {
   echo "=== push-hook: Functional test of direct-push-to-protected-branch guardrail ==="
   clean_claude_dir
@@ -525,9 +590,10 @@ case "$SCENARIO" in
   merge-existing)    test_merge_existing ;;
   scan-commit)       test_scan_commit ;;
   push-hook)         test_push_hook ;;
+  schema-remediation) test_schema_remediation ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation"
     exit 1
     ;;
 esac

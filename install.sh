@@ -36,7 +36,17 @@ mkdir -p "$CLAUDE_DIR"
 
 # --- Merge settings.json ---
 
+BROKEN_SCHEMA="https://claude.ai/schemas/claude-code-settings.json"
+
 if [[ -f "$SETTINGS" ]]; then
+  # Capture the old $schema BEFORE the merge overwrites it. If the user
+  # is on a pre-v0.3.5 install, their existing settings.json carries the
+  # broken value that made Claude Code discard the entire file. The merge
+  # below silently corrects it; the check after the merge surfaces the
+  # fact so the user learns their guardrails were previously inactive.
+  # See https://github.com/dwarvesf/claude-guardrails/issues/6.
+  OLD_SCHEMA="$(jq -r '."$schema" // ""' "$SETTINGS" 2>/dev/null || echo "")"
+
   cp "$SETTINGS" "$SETTINGS.backup"
   echo "  Backed up existing settings → settings.json.backup"
 
@@ -59,6 +69,26 @@ if [[ -f "$SETTINGS" ]]; then
   ' "$SETTINGS.backup" "$VARIANT_DIR/settings.json" > "$SETTINGS.tmp" \
     && mv "$SETTINGS.tmp" "$SETTINGS"
   echo "  Merged settings.json (deny rules + hooks deduplicated)"
+
+  if [[ "$OLD_SCHEMA" == "$BROKEN_SCHEMA" ]]; then
+    cat <<'NOTICE'
+
+====================== NOTICE — schema URL auto-corrected ======================
+
+Your existing ~/.claude/settings.json carried the pre-v0.3.5 $schema value,
+which Claude Code silently rejects. Any claude-guardrails release from v0.3.0
+through v0.3.4 shipped that URL, which means your deny rules, hooks, and
+secret scanner were INACTIVE on every session until now.
+
+We corrected the $schema during this merge. Start a new Claude Code session
+for the fix to take effect.
+
+Background: https://github.com/dwarvesf/claude-guardrails/issues/6
+
+================================================================================
+
+NOTICE
+  fi
 else
   cp "$VARIANT_DIR/settings.json" "$SETTINGS"
   echo "  Created settings.json"
