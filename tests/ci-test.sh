@@ -116,6 +116,16 @@ assert_no_grep() {
   fi
 }
 
+# Claude Code silently discards any settings.json whose $schema is not the
+# schemastore URL. This bug shipped undetected from initial commit through
+# v0.3.4 and was fixed in PR #3. Every fresh-install scenario asserts this
+# so a typo or bad merge never causes guardrails to become no-ops again.
+EXPECTED_SCHEMA="https://json.schemastore.org/claude-code-settings.json"
+
+get_schema() {
+  jq -r '."$schema" // "(missing)"' "$SETTINGS"
+}
+
 get_deny_count() {
   jq '.permissions.deny // [] | length' "$SETTINGS"
 }
@@ -156,6 +166,7 @@ test_lite_fresh() {
   bash "$REPO_DIR/install.sh" lite
 
   assert_file_exists "$SETTINGS" "settings.json created"
+  assert_eq "$(get_schema)" "$EXPECTED_SCHEMA" "\$schema is schemastore URL (lite)"
   assert_eq "$(get_deny_count)" "21" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "4" "PreToolUse hook count"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
@@ -177,6 +188,7 @@ test_full_fresh() {
   bash "$REPO_DIR/install.sh" full
 
   assert_file_exists "$SETTINGS" "settings.json created"
+  assert_eq "$(get_schema)" "$EXPECTED_SCHEMA" "\$schema is schemastore URL (full)"
   assert_eq "$(get_deny_count)" "40" "deny rule count"
   assert_eq "$(get_pre_hook_count)" "6" "PreToolUse hook count"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count"
@@ -317,6 +329,7 @@ EOF
   # Install lite on top of existing config
   bash "$REPO_DIR/install.sh" lite
 
+  assert_eq "$(get_schema)" "$EXPECTED_SCHEMA" "\$schema set after merging into schemaless existing config"
   assert_eq "$(get_deny_count)" "22" "deny count after install (21 + 1 custom)"
   assert_eq "$(get_pre_hook_count)" "5" "hook count after install (4 + 1 custom)"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
