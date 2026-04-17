@@ -2,6 +2,25 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.7] - 2026-04-17
+
+Replaces the BIP39 mnemonic detector. The previous pattern was `(?i)(^|\s)([a-z]{3,8}\s+){11}[a-z]{3,8}(\s|$)` — "12 or more consecutive lowercase words of 3-8 characters." Ordinary English prose hits that pattern routinely (30-plus short-word runs are common in natural writing), so scan-secrets.sh was blocking legitimate prompts. The regex was never a real BIP39 check; it was a short-word run detector with the wrong name.
+
+### Fixed
+
+- **Wordlist-based BIP39 detection** - `scan-secrets.sh` now loads the official 2048-word BIP39 English wordlist and blocks only when the prompt contains 12+ consecutive tokens all drawn from the list. BIP39 deliberately excludes common English stop-words ("the", "and", "for", "you", ...), so natural prose has near-zero probability of producing a false positive. Verified against the exact prose that previously tripped the regex: it now passes.
+- **Removed the broken regex** from `patterns/secrets.json`. The remaining rules (AWS, GitHub, Anthropic, OpenAI, Google, Slack, Stripe, 1Password, PEM, 64-hex, `API_KEY=value`) are unchanged. The labeled-secret rule already catches `mnemonic: ...` / `seed_phrase: ...` assignments, so labeled mnemonic leaks are still covered.
+- **Scoping:** the wordlist check runs in `scan-secrets.sh` (prompt scanner) only, not in `scan-commit.sh`. Running it on committed code hit too many false positives on legitimate content (documentation, test fixtures, the wordlist file itself). Commit-time leaks via labeled assignments are still caught by the labeled-secret regex.
+
+### Added
+
+- **`patterns/bip39-english.txt`** - the 2048-word list fetched from `bitcoin/bips`. Installed to `~/.claude/hooks/patterns/bip39-english.txt` alongside `secrets.json`. Override path with `$CLAUDE_GUARDRAILS_BIP39_WORDLIST` for tests.
+- **`bip39-scan` CI scenario** - 7 assertions covering: prose with many short words allowed, real 12-word mnemonic blocked, 11-word near-miss allowed, missing wordlist fails open, AWS key still blocked alongside the BIP39 pass, plus install sanity on hook + wordlist files. Wired into the GitHub Actions matrix. CI: 10 scenarios / 96 assertions -> 11 scenarios / 103 assertions.
+
+### Upgrade note
+
+Re-run `bash install.sh <variant>` (or `npx claude-guardrails install`) to pick up the new `scan-secrets.sh`, `scan-commit.sh`, and `patterns/bip39-english.txt`. The merge is additive and preserves custom deny rules and hooks. Until you re-run the installer, the old inline-regex scanner keeps producing false positives on ordinary prose.
+
 ## [0.3.6] — 2026-04-17
 
 Follow-up to v0.3.5. The previous release fixed the `$schema` bug for anyone re-running the installer (the jq merge always prefers the new file's value), but the fix happened silently — a user who ran v0.3.6 install after months on a broken v0.3.0–v0.3.4 install had no way to know their guardrails had been inactive the whole time. This release surfaces that state so users understand the remediation.

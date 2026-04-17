@@ -26,6 +26,7 @@ Full variant additionally includes:
 
 Shared at the repo root:
 - `patterns/secrets.json` — Single source of truth for credential regexes. Installed to `~/.claude/hooks/patterns/secrets.json`. Both `scan-secrets.sh` and `scan-commit.sh` load from this file, so updating a pattern in one place updates both hooks.
+- `patterns/bip39-english.txt` — Official 2048-word BIP39 English wordlist. Installed alongside `secrets.json` and loaded by both scanners for set-membership BIP39 detection (12+ consecutive wordlist tokens = hit). Kept out of `secrets.json` because regex engines can't do set membership; the wordlist check runs as a second jq pass in each scanner.
 
 ## Key Design Decisions
 
