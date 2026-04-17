@@ -2,6 +2,19 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.5] — 2026-04-17
+
+Critical hotfix. The wrong `$schema` URL shipped in every release from v0.3.0 through v0.3.4 caused Claude Code to silently discard the entire settings.json. Anyone who installed claude-guardrails fresh on a machine during that window got zero active guardrails — no deny rules, no hooks, no scanner. Reported and fixed by [@valtumi](https://github.com/valtumi) in #3.
+
+### Fixed
+- **`$schema` URL in both `lite/settings.json` and `full/settings.json`** — was `https://claude.ai/schemas/claude-code-settings.json` (not accepted by Claude Code), now `https://json.schemastore.org/claude-code-settings.json`. Credit: @valtumi (#3).
+
+### Added
+- **CI assertion on `$schema`** — `test_lite_fresh`, `test_full_fresh`, and `test_merge_existing` now verify the post-install `$schema` field matches the schemastore URL. This class of bug previously escaped CI because JSON-parseability and install/uninstall logic tests don't probe whether Claude Code actually honors the file. CI suite: 9 scenarios / 89 assertions → 9 scenarios / 92 assertions.
+
+### Upgrade note
+If you have a pre-0.3.5 install, re-running `npx claude-guardrails install` merges the corrected `$schema` value into your existing `~/.claude/settings.json` (the jq merge prefers the new file's value). Or manually edit the `$schema` field to `https://json.schemastore.org/claude-code-settings.json`. **Until you do one of these, your guardrails are not active.**
+
 ## [0.3.4] — 2026-04-17
 
 Adds a commit-time secret scanner, closing the gap between the prompt-submit scanner (which catches pasted credentials) and the code Claude writes and then tries to commit. Also tightens the direct-push guardrail's regex to kill a real-world false positive discovered while shipping this change.
