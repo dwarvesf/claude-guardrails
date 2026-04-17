@@ -15,6 +15,8 @@
 #   - hooks.PreToolUse entries that match the variant's hook list
 #   - hooks.UserPromptSubmit entries for scan-secrets (both variants)
 #   - ~/.claude/hooks/scan-secrets/ directory (both variants)
+#   - ~/.claude/hooks/scan-commit/ directory (both variants)
+#   - ~/.claude/hooks/patterns/ directory (shared pattern list, both variants)
 #   - hooks.PostToolUse entries (full only — prompt injection defender)
 #   - ~/.claude/hooks/prompt-injection-defender/ directory (full only)
 #   - "# Security Rules" section from ~/.claude/CLAUDE.md
@@ -104,6 +106,22 @@ SCAN_DIR="$CLAUDE_DIR/hooks/scan-secrets"
 if [[ -d "$SCAN_DIR" ]]; then
   rm -rf "$SCAN_DIR"
   echo "  Deleted ~/.claude/hooks/scan-secrets/"
+fi
+
+# Remove the scan-commit script directory (PreToolUse hook entry is removed
+# automatically by the variant-settings subtract above).
+COMMIT_DIR="$CLAUDE_DIR/hooks/scan-commit"
+if [[ -d "$COMMIT_DIR" ]]; then
+  rm -rf "$COMMIT_DIR"
+  echo "  Deleted ~/.claude/hooks/scan-commit/"
+fi
+
+# Remove the shared patterns directory. Both scan-secrets and scan-commit
+# used it, so when both are gone the patterns file has no remaining reader.
+PATTERNS_DIR="$CLAUDE_DIR/hooks/patterns"
+if [[ -d "$PATTERNS_DIR" ]]; then
+  rm -rf "$PATTERNS_DIR"
+  echo "  Deleted ~/.claude/hooks/patterns/"
 fi
 
 # --- Full only: remove PostToolUse hook + defender script ---

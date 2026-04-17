@@ -76,6 +76,15 @@ else
   echo "  Appended security rules to CLAUDE.md"
 fi
 
+# --- Both variants: shared patterns file ---
+# scan-secrets.sh and scan-commit.sh both load regexes from this file so
+# there's a single source of truth for what counts as a credential.
+
+PATTERNS_DIR="$CLAUDE_DIR/hooks/patterns"
+mkdir -p "$PATTERNS_DIR"
+cp "$SCRIPT_DIR/patterns/secrets.json" "$PATTERNS_DIR/secrets.json"
+echo "  Installed patterns/secrets.json → ~/.claude/hooks/patterns/"
+
 # --- Both variants: scan-secrets UserPromptSubmit hook ---
 
 SCAN_DIR="$CLAUDE_DIR/hooks/scan-secrets"
@@ -83,6 +92,16 @@ mkdir -p "$SCAN_DIR"
 cp "$VARIANT_DIR/scan-secrets.sh" "$SCAN_DIR/scan-secrets.sh"
 chmod +x "$SCAN_DIR/scan-secrets.sh"
 echo "  Installed scan-secrets.sh → ~/.claude/hooks/scan-secrets/"
+
+# --- Both variants: scan-commit PreToolUse hook ---
+# Fires on `git commit` Bash calls and scans the staged diff for the same
+# secret patterns scan-secrets uses on prompts.
+
+COMMIT_DIR="$CLAUDE_DIR/hooks/scan-commit"
+mkdir -p "$COMMIT_DIR"
+cp "$VARIANT_DIR/scan-commit.sh" "$COMMIT_DIR/scan-commit.sh"
+chmod +x "$COMMIT_DIR/scan-commit.sh"
+echo "  Installed scan-commit.sh → ~/.claude/hooks/scan-commit/"
 
 # Merge UserPromptSubmit hook entry into settings.json
 PROMPT_HOOK='[{"hooks":[{"type":"command","command":"~/.claude/hooks/scan-secrets/scan-secrets.sh","timeout":5}]}]'

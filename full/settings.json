@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"git\\s+push\\s+.*\\b(main|master|production)\\b\"; then echo \"BLOCKED: Direct push to main/master/production. Use a feature branch and PR.\" >&2; exit 2; fi'"
+            "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"(^|[&|;(])[[:space:]]*git[[:space:]]+push[[:space:]]+.*\\b(main|master|production)([[:space:];|&)]|$)\"; then echo \"BLOCKED: Direct push to main/master/production. Use a feature branch and PR.\" >&2; exit 2; fi'"
           }
         ]
       },
@@ -96,6 +96,16 @@
           {
             "type": "command",
             "command": "bash -c 'CMD=$(cat | jq -r \".tool_input.command // empty\"); if echo \"$CMD\" | grep -qEi \"--dangerously-skip-permissions|--bypass-permissions\"; then echo \"BLOCKED: Cannot escalate permissions from within a session.\" >&2; exit 2; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/scan-commit/scan-commit.sh",
+            "timeout": 10
           }
         ]
       }

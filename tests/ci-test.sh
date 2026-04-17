@@ -157,10 +157,13 @@ test_lite_fresh() {
 
   assert_file_exists "$SETTINGS" "settings.json created"
   assert_eq "$(get_deny_count)" "21" "deny rule count"
-  assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count"
+  assert_eq "$(get_pre_hook_count)" "4" "PreToolUse hook count"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
   assert_file_exists "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script exists"
   assert_file_executable "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script is executable"
+  assert_file_exists "$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh" "scan-commit script exists"
+  assert_file_executable "$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh" "scan-commit script is executable"
+  assert_file_exists "$CLAUDE_DIR/hooks/patterns/secrets.json" "shared patterns file exists"
   assert_file_exists "$CLAUDE_MD" "CLAUDE.md created"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md contains Security Rules heading"
 
@@ -175,13 +178,16 @@ test_full_fresh() {
 
   assert_file_exists "$SETTINGS" "settings.json created"
   assert_eq "$(get_deny_count)" "40" "deny rule count"
-  assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count"
+  assert_eq "$(get_pre_hook_count)" "6" "PreToolUse hook count"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count"
   assert_file_exists "$CLAUDE_DIR/hooks/prompt-injection-defender/prompt-injection-defender.sh" "defender script exists"
   assert_file_executable "$CLAUDE_DIR/hooks/prompt-injection-defender/prompt-injection-defender.sh" "defender script is executable"
   assert_file_exists "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script exists"
   assert_file_executable "$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh" "scan-secrets script is executable"
+  assert_file_exists "$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh" "scan-commit script exists"
+  assert_file_executable "$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh" "scan-commit script is executable"
+  assert_file_exists "$CLAUDE_DIR/hooks/patterns/secrets.json" "shared patterns file exists"
   assert_file_exists "$CLAUDE_MD" "CLAUDE.md created"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md contains Security Rules heading"
 
@@ -196,7 +202,7 @@ test_lite_idempotent() {
   bash "$REPO_DIR/install.sh" lite
 
   assert_eq "$(get_deny_count)" "21" "deny rule count after double install"
-  assert_eq "$(get_pre_hook_count)" "3" "PreToolUse hook count after double install"
+  assert_eq "$(get_pre_hook_count)" "4" "PreToolUse hook count after double install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md still contains Security Rules"
 
@@ -211,7 +217,7 @@ test_lite_roundtrip() {
 
   # Sanity check install worked
   assert_eq "$(get_deny_count)" "21" "deny count after install"
-  assert_eq "$(get_pre_hook_count)" "3" "PreToolUse count after install"
+  assert_eq "$(get_pre_hook_count)" "4" "PreToolUse count after install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
   bash "$REPO_DIR/uninstall.sh" lite
@@ -220,6 +226,8 @@ test_lite_roundtrip() {
   assert_eq "$(jq '.hooks.PreToolUse // [] | length' "$SETTINGS")" "0" "PreToolUse count after uninstall"
   assert_eq "$(jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS")" "0" "UserPromptSubmit count after uninstall"
   assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-secrets" "scan-secrets dir removed"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-commit" "scan-commit dir removed"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/patterns" "patterns dir removed"
   # CLAUDE.md should be deleted (was only security rules)
   assert_file_not_exists "$CLAUDE_MD" "CLAUDE.md removed (was empty)"
 
@@ -234,7 +242,7 @@ test_full_roundtrip() {
 
   # Sanity check install worked
   assert_eq "$(get_deny_count)" "40" "deny count after install"
-  assert_eq "$(get_pre_hook_count)" "5" "PreToolUse count after install"
+  assert_eq "$(get_pre_hook_count)" "6" "PreToolUse count after install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
 
   bash "$REPO_DIR/uninstall.sh" full
@@ -244,6 +252,8 @@ test_full_roundtrip() {
   assert_eq "$(jq '.hooks.UserPromptSubmit // [] | length' "$SETTINGS")" "0" "UserPromptSubmit count after uninstall"
   assert_dir_not_exists "$CLAUDE_DIR/hooks/prompt-injection-defender" "defender dir removed"
   assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-secrets" "scan-secrets dir removed"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/scan-commit" "scan-commit dir removed"
+  assert_dir_not_exists "$CLAUDE_DIR/hooks/patterns" "patterns dir removed"
   # CLAUDE.md should be deleted (was only security rules)
   assert_file_not_exists "$CLAUDE_MD" "CLAUDE.md removed (was empty)"
 
@@ -258,7 +268,7 @@ test_full_idempotent() {
   bash "$REPO_DIR/install.sh" full
 
   assert_eq "$(get_deny_count)" "40" "deny count after double install"
-  assert_eq "$(get_pre_hook_count)" "5" "PreToolUse hook count after double install"
+  assert_eq "$(get_pre_hook_count)" "6" "PreToolUse hook count after double install"
   assert_eq "$(get_post_hook_count)" "1" "PostToolUse hook count after double install"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit hook count after double install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md still contains Security Rules"
@@ -308,7 +318,7 @@ EOF
   bash "$REPO_DIR/install.sh" lite
 
   assert_eq "$(get_deny_count)" "22" "deny count after install (21 + 1 custom)"
-  assert_eq "$(get_pre_hook_count)" "4" "hook count after install (3 + 1 custom)"
+  assert_eq "$(get_pre_hook_count)" "5" "hook count after install (4 + 1 custom)"
   assert_eq "$(get_prompt_hook_count)" "1" "UserPromptSubmit count after install"
   assert_grep "$CLAUDE_MD" "# My Project Rules" "CLAUDE.md custom content preserved after install"
   assert_grep "$CLAUDE_MD" "# Security Rules" "CLAUDE.md security section appended after install"
@@ -332,6 +342,161 @@ EOF
   finish
 }
 
+test_scan_commit() {
+  echo "=== scan-commit: Functional test of the installed PreToolUse hook ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh"
+  assert_file_executable "$HOOK" "scan-commit hook is executable"
+
+  # Build a throwaway git repo inside the sandboxed HOME so the hook has
+  # a real git index to inspect. Any diff/commit here is isolated from
+  # the host by virtue of HOME being a mktemp dir.
+  REPO="$HOME/scan-commit-fixture"
+  mkdir -p "$REPO"
+  ( cd "$REPO" \
+      && git init -q \
+      && git config user.email test@example.com \
+      && git config user.name "Scan Commit Test" )
+
+  # Case 1: clean staged diff — hook must allow (exit 0)
+  echo "clean code here" > "$REPO/foo.js"
+  ( cd "$REPO" && git add foo.js )
+  CLEAN_INPUT="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git commit -m test"}, cwd:$cwd}')"
+  if echo "$CLEAN_INPUT" | "$HOOK" >/dev/null 2>&1; then
+    echo "  PASS: clean staged diff allowed (exit 0)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: clean staged diff blocked (should have allowed)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Case 2: stage an AWS key — hook must block (exit 2)
+  echo "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE" >> "$REPO/foo.js"
+  ( cd "$REPO" && git add foo.js )
+  DIRTY_INPUT="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git commit -m test"}, cwd:$cwd}')"
+  set +e
+  echo "$DIRTY_INPUT" | "$HOOK" >/dev/null 2>&1
+  EXIT=$?
+  set -e
+  assert_eq "$EXIT" "2" "staged AWS key blocked (exit 2)"
+
+  # Case 3: non-commit Bash command — hook must pass through (exit 0)
+  NON_COMMIT="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git status"}, cwd:$cwd}')"
+  if echo "$NON_COMMIT" | "$HOOK" >/dev/null 2>&1; then
+    echo "  PASS: non-commit command passed through (exit 0)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: non-commit command blocked (should have passed through)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Case 4: `git commit-tree` plumbing — must not be misread as `git commit`
+  PLUMBING="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git commit-tree deadbeef"}, cwd:$cwd}')"
+  if echo "$PLUMBING" | "$HOOK" >/dev/null 2>&1; then
+    echo "  PASS: git commit-tree plumbing not intercepted"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: git commit-tree was intercepted (false positive on word boundary)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Case 5: chained command `git add && git commit` with staged AWS key — must block.
+  # Claude Code commonly bundles add + commit in a single Bash call, so the matcher
+  # has to recognise `git commit` when it sits after `&&` rather than at the start.
+  CHAINED="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git add foo.js && git commit -m wip"}, cwd:$cwd}')"
+  set +e
+  echo "$CHAINED" | "$HOOK" >/dev/null 2>&1
+  EXIT=$?
+  set -e
+  assert_eq "$EXIT" "2" "chained add && commit with AWS key blocked"
+
+  # Case 6: heredoc-wrapped commit message — Claude's default commit flow uses
+  # `git commit -m "$(cat <<'EOF' ... EOF)"`. The embedded newlines and quotes
+  # must not prevent the matcher from recognising the outer `git commit`.
+  HEREDOC_CMD='git commit -m "$(cat <<'\''EOF'\''
+wip message
+EOF
+)"'
+  HEREDOC="$(jq -n --arg cmd "$HEREDOC_CMD" --arg cwd "$REPO" '{tool_input:{command:$cmd}, cwd:$cwd}')"
+  set +e
+  echo "$HEREDOC" | "$HOOK" >/dev/null 2>&1
+  EXIT=$?
+  set -e
+  assert_eq "$EXIT" "2" "heredoc-wrapped commit with AWS key blocked"
+
+  # Case 7: patterns file missing — must fail open (exit 0) rather than block
+  # legitimate work. A broken install should not wedge every commit.
+  PATTERNS_INSTALLED="$CLAUDE_DIR/hooks/patterns/secrets.json"
+  mv "$PATTERNS_INSTALLED" "$PATTERNS_INSTALLED.bak"
+  set +e
+  echo "$DIRTY_INPUT" | "$HOOK" >/dev/null 2>&1
+  EXIT=$?
+  set -e
+  mv "$PATTERNS_INSTALLED.bak" "$PATTERNS_INSTALLED"
+  assert_eq "$EXIT" "0" "missing patterns file fails open"
+
+  finish
+}
+
+test_push_hook() {
+  echo "=== push-hook: Functional test of direct-push-to-protected-branch guardrail ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  # The push-protection hook is the second PreToolUse entry in the variant's
+  # settings.json (after the destructive-delete hook). It is an inline
+  # `bash -c '...'` command, not a separate script file, so we write it
+  # back out to a temp script to invoke it directly.
+  HOOK_CMD="$(jq -r '.hooks.PreToolUse[1].hooks[0].command' "$SETTINGS")"
+  HOOK_WRAP="$HOME/push-hook-wrap.sh"
+  printf '%s\n' "$HOOK_CMD" > "$HOOK_WRAP"
+
+  # Helper: build tool-input JSON for a command string, feed it to the hook,
+  # and return the exit code. The runtime exit contract is 2 = blocked,
+  # 0 = allowed.
+  run_push_hook() {
+    local cmd="$1"
+    local input
+    input="$(jq -n --arg c "$cmd" '{tool_input:{command:$c}}')"
+    set +e
+    echo "$input" | bash "$HOOK_WRAP" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build the dangerous-phrase strings at runtime so this test file itself
+  # does not contain literal `git push origin main` — otherwise running
+  # ci-test.sh under Claude Code would trip the hook that this very test
+  # is exercising. (That false-positive is why this scenario exists.)
+  B="main"
+  M="master"
+  P="production"
+
+  echo "  -- cases that MUST block --"
+  assert_eq "$(run_push_hook "git push origin $B")"                  "2" "direct push to main blocked"
+  assert_eq "$(run_push_hook "git push --force origin $B")"          "2" "force push to main blocked"
+  assert_eq "$(run_push_hook "git push origin $M")"                  "2" "push to master blocked"
+  assert_eq "$(run_push_hook "git push origin $P")"                  "2" "push to production blocked"
+  assert_eq "$(run_push_hook "git fetch && git push origin $B")"     "2" "chained fetch && push blocked"
+  assert_eq "$(run_push_hook "git status; git push origin $B")"      "2" "semicolon-chained push blocked"
+  assert_eq "$(run_push_hook "(git push origin $B)")"                "2" "subshell-wrapped push blocked"
+
+  echo "  -- cases that MUST allow (previously false-positived) --"
+  assert_eq "$(run_push_hook "gh pr create --base $B --body \"see git push origin $B\"")" "0" "PR body containing trigger phrase allowed"
+  assert_eq "$(run_push_hook "echo \"git push origin $B is dangerous\"")"                 "0" "echo commentary allowed"
+  assert_eq "$(run_push_hook "grep 'git push origin $B' history.log")"                    "0" "grep searching for phrase allowed"
+  assert_eq "$(run_push_hook "git push origin feat/foo")"                                 "0" "feature branch push allowed"
+  assert_eq "$(run_push_hook "git push origin main-feature-branch")"                      "0" "branch name with 'main' prefix allowed"
+  assert_eq "$(run_push_hook "git log $B..HEAD")"                                         "0" "git log (non-push) allowed"
+
+  finish
+}
+
 # --- Dispatch ---
 
 echo "Scenario: $SCENARIO"
@@ -345,9 +510,11 @@ case "$SCENARIO" in
   lite-roundtrip)    test_lite_roundtrip ;;
   full-roundtrip)    test_full_roundtrip ;;
   merge-existing)    test_merge_existing ;;
+  scan-commit)       test_scan_commit ;;
+  push-hook)         test_push_hook ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook"
     exit 1
     ;;
 esac

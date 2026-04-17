@@ -27,7 +27,7 @@ Quarterly review process to keep guardrails current. Run through this checklist 
 - [ ] Review deny rule globs against current credential/secret file conventions
 - [ ] Check for new credential types not covered (cloud providers, CI tokens, etc.)
 - [ ] Review false positive reports (if any) and adjust patterns
-- [ ] Verify glob counts: lite=15, full=28 (or update docs if changed)
+- [ ] Verify glob counts: lite=21, full=40 (or update docs if changed)
 
 ### 3. PreToolUse hook patterns
 - [ ] Review destructive delete patterns — any new dangerous commands?
@@ -37,12 +37,14 @@ Quarterly review process to keep guardrails current. Run through this checklist 
 - [ ] (Full only) Review permission escalation patterns — any new bypass techniques?
 - [ ] Check upstream research for new attack patterns to add
 
-### 4. scan-secrets UserPromptSubmit hook (both variants)
+### 4. Shared secret pattern list (`patterns/secrets.json`)
+Used by both `scan-secrets.sh` (prompt) and `scan-commit.sh` (staged diff). Any change here flows to both hooks.
 - [ ] Review credential regex list against current issuer formats (AWS, GitHub, Anthropic, OpenAI, Google, Slack, Stripe, 1Password)
 - [ ] Check for new token prefixes or length changes (e.g. GitHub's token format has evolved; Anthropic and OpenAI both changed theirs historically)
 - [ ] Add patterns for new issuers your team depends on (Linear, Vercel, Supabase, etc.)
 - [ ] Review false positive reports — 64-hex rule intentionally catches SHA-256 digests; confirm this tradeoff still holds
-- [ ] Test with known-good and known-bad paste samples
+- [ ] Test with known-good and known-bad paste samples via `scan-secrets.sh`
+- [ ] Test commit-time behaviour via the `scan-commit` CI scenario (staged AWS key blocks; clean diff allows; `git commit-tree` plumbing not intercepted)
 
 ### 5. Prompt injection defender (full only)
 - [ ] Review injection signature regexes against latest research
@@ -60,7 +62,7 @@ Quarterly review process to keep guardrails current. Run through this checklist 
 ### 7. Dependencies & distribution
 - [ ] Run `npm audit` on package.json (should stay zero-dep)
 - [ ] Verify `npx claude-guardrails install` works on fresh machine
-- [ ] Verify `jq` version compatibility (test on latest macOS + Ubuntu LTS) — `scan-secrets.sh` depends on Oniguruma regex support in jq
+- [ ] Verify `jq` version compatibility (test on latest macOS + Ubuntu LTS) — `scan-secrets.sh` and `scan-commit.sh` both depend on Oniguruma regex support in jq
 - [ ] Check if npm package needs version bump
 
 ## Review Log

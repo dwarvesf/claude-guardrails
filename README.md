@@ -12,8 +12,9 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 |---|---|---|
 | **Use when** | Internal/trusted projects | Open source repos, untrusted codebases, production credentials |
 | Credential deny rules | 21 rules (SSH, AWS, GPG, kube, Azure, .env, .pem, destructive Bash, etc.) | 40 rules (adds secrets dirs, shell profiles, crypto wallets, etc.) |
-| PreToolUse hooks | 3 (destructive deletes, direct push, pipe-to-shell) | 5 (adds data exfiltration, permission escalation) |
+| PreToolUse hooks | 4 (destructive deletes, direct push, pipe-to-shell, commit-time secret scan) | 6 (adds data exfiltration, permission escalation) |
 | UserPromptSubmit inbound secret scanner | Yes (`scan-secrets.sh`) | Yes (`scan-secrets.sh`) |
+| PreToolUse commit-time secret scan | Yes (`scan-commit.sh`) | Yes (`scan-commit.sh`) |
 | PostToolUse prompt injection scanner | No | Yes (`prompt-injection-defender.sh`) |
 | Privacy env flags | Yes (telemetry, error reports, feedback survey off) | Yes |
 | CLAUDE.md security rules | Yes | Yes |
@@ -27,10 +28,10 @@ Claude Code can read your filesystem, run shell commands, and fetch URLs autonom
 brew install jq          # macOS
 # sudo apt install jq    # Debian/Ubuntu
 
-# Lite (3 hooks, 15 deny rules — for trusted projects)
+# Lite (4 hooks, 21 deny rules — for trusted projects)
 npx claude-guardrails install
 
-# Full (5 hooks + prompt injection scanner — for untrusted codebases)
+# Full (6 hooks + prompt injection scanner — for untrusted codebases)
 npx claude-guardrails install full
 ```
 
@@ -55,8 +56,10 @@ If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step
 
 1. Copy the variant's `settings.json` to `~/.claude/settings.json` (or merge `permissions.deny` and `hooks.PreToolUse` arrays into your existing config)
 2. Append the variant's `CLAUDE-security-section.md` to `~/.claude/CLAUDE.md`
-3. Copy `scan-secrets.sh` to `~/.claude/hooks/scan-secrets/` and add the `UserPromptSubmit` hook entry to settings
-4. (Full only) Copy `prompt-injection-defender.sh` to `~/.claude/hooks/prompt-injection-defender/` and add the `PostToolUse` hook entry to settings
+3. Copy `patterns/secrets.json` to `~/.claude/hooks/patterns/secrets.json` (shared pattern list for the two scanners below)
+4. Copy `scan-secrets.sh` to `~/.claude/hooks/scan-secrets/` and add the `UserPromptSubmit` hook entry to settings
+5. Copy `scan-commit.sh` to `~/.claude/hooks/scan-commit/` (its `PreToolUse` hook entry is already in the variant's `settings.json`)
+6. (Full only) Copy `prompt-injection-defender.sh` to `~/.claude/hooks/prompt-injection-defender/` and add the `PostToolUse` hook entry to settings
 
 </details>
 
@@ -99,7 +102,7 @@ For sessions reviewing untrusted code — unknown repos, open-source forks, cont
 Defense-in-depth layers that catch what the sandbox doesn't need to. They do not stop a determined prompt injection:
 
 1. **Permission deny rules** — Block Claude's Read/Edit/Bash tools from touching sensitive paths and running obviously dangerous commands (SSH, AWS, GPG, kubeconfig, Azure, crypto wallets in `full`, plus `sudo`/`mkfs`/`dd`/`rm -rf` as Bash patterns). _Covers Claude's built-in tools; obfuscated bash can slip through._
-2. **PreToolUse hooks** — Pattern-match dangerous bash commands before execution (destructive deletes, direct pushes, pipe-to-shell). `full` adds data-exfiltration and permission-escalation patterns. _Pattern-based, obfuscation escapes._
+2. **PreToolUse hooks** — Pattern-match dangerous bash commands before execution (destructive deletes, direct pushes, pipe-to-shell). `full` adds data-exfiltration and permission-escalation patterns. Both variants also ship `scan-commit.sh`, which intercepts `git commit` and runs the staged diff through the same secret regex set used on prompts — catching credentials that Claude writes into code and then tries to commit. _Pattern-based, obfuscation escapes._
 3. **UserPromptSubmit secret scanner** — `scan-secrets.sh` (bash + jq) blocks prompts containing live credentials (AWS keys, GitHub / Anthropic / OpenAI tokens, PEM blocks, BIP39 phrases). Prevents pasted secrets from reaching the model or landing in the on-disk session transcript.
 4. **PostToolUse prompt injection scanner** (`full` only) — Scans Read/WebFetch/Bash outputs for injection patterns. Warns in-context, doesn't block, so legitimate security content doesn't break.
 5. **CLAUDE.md security rules** — Natural-language instructions Claude usually follows (no hardcoded secrets, treat external content as untrusted, etc).
@@ -117,7 +120,7 @@ These guardrails trade convenience for safety. Be aware of what you're signing u
 
 **Deny rules only cover Claude's built-in tools, not bash.** `Read ~/.ssh/id_rsa` is denied, but `bash cat ~/.ssh/id_rsa` is not. The hooks catch some bash patterns, but they can't catch everything. This is a fundamental limitation of pattern matching — see the "Sandboxing is the boundary" section above for why `/sandbox` is the layer that actually enforces.
 
-**Hooks add latency to every Bash call.** Each PreToolUse hook spawns a subshell, pipes through `jq`, and runs `grep`. With 3 hooks (lite) that's 3 extra processes per Bash tool call. With 5 hooks + PostToolUse scanner (full), it's 6. Noticeable on slower machines or rapid-fire commands.
+**Hooks add latency to every Bash call.** Each PreToolUse hook spawns a subshell, pipes through `jq`, and runs `grep`. With 4 hooks (lite) that's 4 extra processes per Bash tool call. With 6 hooks + PostToolUse scanner (full), it's 7. The `scan-commit` hook only does its heavy work (`git diff --cached`) when the command actually contains `git commit`, so the cost on non-commit calls is one `jq` invocation + a regex against the command string. Noticeable on slower machines or rapid-fire commands.
 
 **The prompt injection scanner is noisy.** It pattern-matches strings like "ignore previous instructions" and "system prompt:" — which appear in legitimate security docs, CTF writeups, and this README. Expect warnings when reading security-related content. It warns but doesn't block, so the cost is distraction rather than breakage.
 

@@ -18,6 +18,7 @@ Claude Code can read your codebase, execute shell commands, fetch URLs, and chai
 claude-code-security/
 |-- settings.json                        # Global settings with deny rules + hooks
 |-- scan-secrets.sh                      # UserPromptSubmit hook: blocks pasted credentials
+|-- scan-commit.sh                       # PreToolUse hook: blocks `git commit` on staged secrets
 |-- prompt-injection-defender.sh         # PostToolUse hook scanning for injection
 |-- CLAUDE-security-section.md           # Security rules to merge into your CLAUDE.md
 |-- SETUP.md                             # This file
@@ -168,6 +169,7 @@ Blocks dangerous bash commands BEFORE they execute:
 - **Pipe-to-shell**: `curl ... | bash`, `wget ... | sh`
 - **Data exfiltration**: Connections to ngrok, requestbin, webhook.site, etc.
 - **Permission escalation**: Attempts to use `--dangerously-skip-permissions` from within a session
+- **Commit-time secret scan (`scan-commit.sh`)**: intercepts `git commit`, runs the staged diff through the same regex set as the prompt scanner, and blocks the commit if a credential is present. Closes the gap where Claude writes a secret into code and then commits it — the UserPromptSubmit scanner only catches credentials that arrived *via* the prompt.
 
 **Limitation:** Pattern matching, not semantic analysis. Obfuscated commands can bypass. But it catches the common and accidental cases, which is 90%+ of real risk.
 

@@ -6,51 +6,34 @@
 # exit in UserPromptSubmit prevents the prompt from reaching the model and
 # surfaces the stderr message to the user.
 #
-# All regex matching runs inside jq (Oniguruma), which supports lookbehind,
-# inline flags, and quantifiers the POSIX ERE engine in grep -E does not.
-# Requires only bash + jq — jq is already a claude-guardrails dependency.
+# Pattern list is loaded from ../patterns/secrets.json (shared with
+# scan-commit.sh). All regex matching runs inside jq (Oniguruma), which
+# supports lookbehind, inline flags, and quantifiers the POSIX ERE engine
+# in grep -E does not. Requires only bash + jq.
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PATTERNS_FILE="${CLAUDE_GUARDRAILS_PATTERNS:-$SCRIPT_DIR/../patterns/secrets.json}"
 
 INPUT="$(cat)"
 
 # Fail-open on malformed JSON so a Claude Code schema change never blocks
-# legitimate work. The first jq call validates parseability; if it fails,
-# exit 0 without blocking.
+# legitimate work.
 if ! echo "$INPUT" | jq -e . >/dev/null 2>&1; then
   exit 0
 fi
 
-# Each pattern is a name|Oniguruma-regex pair. Order matches the prior
-# Python implementation so behavior is identical.
+# Fail-open if the shared patterns file is missing. Log once to stderr so
+# the user notices a broken install rather than silently running unguarded.
+if [[ ! -f "$PATTERNS_FILE" ]]; then
+  echo "scan-secrets: patterns file not found at $PATTERNS_FILE (skipping scan)" >&2
+  exit 0
+fi
+
 HITS="$(
-  echo "$INPUT" | jq -r '
+  echo "$INPUT" | jq -r --slurpfile pats "$PATTERNS_FILE" '
     (.prompt // "") as $p |
-    [
-      {n: "AWS access key ID",
-       r: "\\bAKIA[0-9A-Z]{16}\\b"},
-      {n: "GitHub token (PAT / OAuth / server-to-server / user / refresh)",
-       r: "\\bgh[pousr]_[A-Za-z0-9_]{36,}\\b"},
-      {n: "Anthropic API key",
-       r: "\\bsk-ant-[A-Za-z0-9\\-_]{50,}\\b"},
-      {n: "OpenAI API key",
-       r: "\\bsk-(proj-)?[A-Za-z0-9\\-_]{40,}\\b"},
-      {n: "Google API key",
-       r: "\\bAIza[0-9A-Za-z\\-_]{35}\\b"},
-      {n: "Slack token",
-       r: "\\bxox[abprs]-[A-Za-z0-9\\-]{10,}\\b"},
-      {n: "Stripe key",
-       r: "\\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{24,}\\b"},
-      {n: "1Password service account token",
-       r: "\\bops_[A-Za-z0-9+/=]{40,}\\b"},
-      {n: "PEM private-key block header",
-       r: "-----BEGIN\\s+(RSA|DSA|EC|OPENSSH|PGP|ENCRYPTED|PRIVATE)(\\s+PRIVATE)?\\s+KEY-----"},
-      {n: "Hex private key (64 hex chars — also blocks SHA-256 digests by design)",
-       r: "(?<![a-fA-F0-9])(0x)?[a-fA-F0-9]{64}(?![a-fA-F0-9])"},
-      {n: "Secret-like variable assignment",
-       r: "(?i)\\b(api[_-]?key|api[_-]?secret|auth[_-]?token|access[_-]?token|secret[_-]?key|private[_-]?key|passphrase|mnemonic|seed[_-]?phrase)\\s*[=:]\\s*[\"`'"'"']?[A-Za-z0-9+/=_\\-]{16,}[\"`'"'"']?"},
-      {n: "BIP39-shaped mnemonic (12+ short words, case-insensitive)",
-       r: "(?i)(^|\\s)([a-z]{3,8}\\s+){11}[a-z]{3,8}(\\s|$)"}
-    ]
+    $pats[0]
     | map(select(.r as $r | $p | test($r)))
     | map(.n) | .[]
   '
