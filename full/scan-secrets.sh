@@ -40,26 +40,29 @@ HITS="$(
   '
 )"
 
-# BIP39 wordlist pass. A real mnemonic is 12+ consecutive words drawn from
-# the 2048-word English list, which deliberately excludes common stop-words
-# ("the", "and", "for", ...). Checking set membership avoids the false
-# positives the old "12+ short words" regex produced on ordinary prose.
+# BIP39 wordlist pass. A real mnemonic is 12+ words drawn from the 2048-word
+# English list, formatted as space-separated tokens (that is how every wallet
+# renders one). Prose that happens to contain the same wordlist words is
+# broken up by punctuation, contractions, digits, or short words, so we
+# only flag runs of 12+ candidate tokens (3-8 lowercase letters) that are
+# separated solely by whitespace, then confirm every token in the run is a
+# wordlist member. This rules out sentences like "question what else you
+# need you feel that ready then that ready okay" which tokenised to 13
+# wordlist hits under the old count-the-matches approach.
 if [[ -f "$BIP39_WORDLIST" ]]; then
   BIP39_HIT="$(
     echo "$INPUT" | jq -r --rawfile wl "$BIP39_WORDLIST" '
       (.prompt // "" | ascii_downcase) as $p |
-      [$p | scan("\\b[a-z]{3,8}\\b")] as $tokens |
       ($wl | split("\n") | map(select(length >= 3 and length <= 8))
         | reduce .[] as $w ({}; .[$w] = true)) as $set |
-      ($tokens | length) as $n |
-      if $n < 12 then empty
-      else
-        [range(0; $n - 11) | . as $i |
-         select([range($i; $i + 12) | $set[$tokens[.]]] | all)]
-        | if length > 0
-          then "BIP39 mnemonic (12+ consecutive wordlist words)"
-          else empty end
-      end
+      [ $p
+        | scan("(?:\\b[a-z]{3,8}\\b\\s+){11,}\\b[a-z]{3,8}\\b")
+        | [scan("\\b[a-z]{3,8}\\b")]
+        | select(all(.[]; $set[.]))
+      ] as $hits |
+      if ($hits | length) > 0
+      then "BIP39 mnemonic (12+ consecutive wordlist words)"
+      else empty end
     '
   )"
   if [[ -n "$BIP39_HIT" ]]; then

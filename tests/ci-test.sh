@@ -649,6 +649,24 @@ test_bip39_scan() {
   AWS_PROMPT="my key is $AWS_KEY please rotate"
   assert_eq "$(run_scan "$AWS_PROMPT")" "2" "AWS key still blocked alongside BIP39 logic"
 
+  # Case 6: 12 wordlist words joined by punctuation, not whitespace. A real
+  # mnemonic is space-separated; the same words sprinkled through prose are
+  # broken up by commas, periods, contractions, or short stop-words. The
+  # scanner must only fire on whitespace-only runs or ordinary sentences
+  # that happen to share vocabulary with BIP39 get blocked (the regression
+  # that surfaced as a user-reported false positive on a crypto-trading
+  # message where words like "question what else you need you feel that
+  # ready then that ready okay" tokenised to 13 wordlist hits).
+  COMMA_SEP="$(head -12 "$WORDLIST" | paste -sd, - | sed 's/,/, /g')"
+  PROSE_HITS="intro: $COMMA_SEP - not a real seed"
+  assert_eq "$(run_scan "$PROSE_HITS")" "0" "12 wordlist words separated by punctuation allowed"
+
+  # Case 7: a real mnemonic wrapped across newlines (how wallets display and
+  # how users paste them). Whitespace includes newline, so the run detector
+  # must still fire.
+  MNEMONIC_WRAPPED="$(head -12 "$WORDLIST")"
+  assert_eq "$(run_scan "$MNEMONIC_WRAPPED")" "2" "newline-wrapped 12-word mnemonic still blocked"
+
   finish
 }
 
