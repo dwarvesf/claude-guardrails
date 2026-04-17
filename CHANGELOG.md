@@ -2,6 +2,14 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.6] — 2026-04-17
+
+Follow-up to v0.3.5. The previous release fixed the `$schema` bug for anyone re-running the installer (the jq merge always prefers the new file's value), but the fix happened silently — a user who ran v0.3.6 install after months on a broken v0.3.0–v0.3.4 install had no way to know their guardrails had been inactive the whole time. This release surfaces that state so users understand the remediation.
+
+### Added
+- **Install-time remediation notice** — when `install.sh` detects the pre-v0.3.5 `$schema` URL in an existing `~/.claude/settings.json`, it prints a clearly-bordered `NOTICE` after the merge explaining (1) what the old value was, (2) that it silently disabled every guardrail in prior installs, (3) that it's been corrected, and (4) a pointer to the advisory in #6. Fresh installs and existing installs with the correct `$schema` stay quiet (no false positive).
+- **`schema-remediation` CI scenario** — 4 assertions covering: broken schema triggers the notice; post-install `$schema` is corrected; fresh install is quiet; correct-existing install is quiet. Wired into the GitHub Actions matrix. CI: 9 scenarios / 92 assertions → 10 scenarios / 96 assertions.
+
 ## [0.3.5] — 2026-04-17
 
 Critical hotfix. The wrong `$schema` URL shipped in every release from v0.3.0 through v0.3.4 caused Claude Code to silently discard the entire settings.json. Anyone who installed claude-guardrails fresh on a machine during that window got zero active guardrails — no deny rules, no hooks, no scanner. Reported and fixed by [@valtumi](https://github.com/valtumi) in #3.
