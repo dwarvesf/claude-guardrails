@@ -4,17 +4,19 @@ All notable changes to claude-guardrails are documented here. Format loosely fol
 
 ## [0.3.4] — 2026-04-17
 
-Adds a commit-time secret scanner, closing the gap between the prompt-submit scanner (which catches pasted credentials) and the code Claude writes and then tries to commit.
+Adds a commit-time secret scanner, closing the gap between the prompt-submit scanner (which catches pasted credentials) and the code Claude writes and then tries to commit. Also tightens the direct-push guardrail's regex to kill a real-world false positive discovered while shipping this change.
 
 ### Added
 - **`scan-commit.sh` PreToolUse hook (both variants)** — fires on `Bash` tool calls, inspects the command for `git commit`, runs `git diff --cached --unified=0` through the same regex set as `scan-secrets.sh`, and blocks (exit 2) on match. Reports matched pattern name(s) and the list of staged files. Word-boundary matching avoids false positives on `git commit-tree` plumbing.
 - **Shared pattern file `patterns/secrets.json`** — single source of truth for credential regexes, loaded by both `scan-secrets.sh` (prompt) and `scan-commit.sh` (staged diff). Installs to `~/.claude/hooks/patterns/secrets.json`. Closes v0.4 WS2 (pattern extraction).
 - **New CI scenario `scan-commit`** — functional test that stands up a throwaway git repo inside the sandboxed HOME and asserts seven response cases: clean diff allowed, AWS key blocked, `git status` passes through, `git commit-tree` plumbing not intercepted, `git add && git commit` chained form blocked, heredoc-wrapped commit message blocked, missing patterns file fails open.
+- **New CI scenario `push-hook`** — functional test for the direct-push-to-protected-branch guardrail. 13 cases: 7 block (direct, force, master, production, `&&`-chained, `;`-chained, subshell-wrapped) and 6 allow (PR body with trigger phrase, echo commentary, grep searching for phrase, feature branch, `main`-prefixed branch name, non-push git command).
 
 ### Changed
 - PreToolUse hook counts: **lite 3 → 4**, **full 5 → 6**.
 - Both `scan-secrets.sh` scripts refactored to load patterns from `../patterns/secrets.json` (supports `$CLAUDE_GUARDRAILS_PATTERNS` override for testing). Behavior unchanged; pattern list and output format preserved.
-- CI suite: 7 scenarios / 58 assertions → 8 scenarios / 76 assertions, all green.
+- **Direct-push hook regex tightened** to only match `git push` at a command-boundary position (start of string, or after `&`, `|`, `;`, `(`). The old regex matched anywhere in the command string and false-positived on `gh pr create --body "... git push origin main ..."` — hit when creating this release's own PR. The trailing branch-name anchor also now requires whitespace / separator / EOS afterwards, so branches like `main-feature-branch` no longer trigger. Known regression: `sudo git push origin main` no longer matches — tradeoff documented.
+- CI suite: 7 scenarios / 58 assertions → 9 scenarios / 89 assertions, all green.
 - `install.sh` copies `patterns/secrets.json` + `scan-commit.sh`; `uninstall.sh` removes `~/.claude/hooks/scan-commit/` and `~/.claude/hooks/patterns/`.
 
 ## [0.3.3] — 2026-04-17

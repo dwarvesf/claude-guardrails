@@ -441,6 +441,62 @@ EOF
   finish
 }
 
+test_push_hook() {
+  echo "=== push-hook: Functional test of direct-push-to-protected-branch guardrail ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  # The push-protection hook is the second PreToolUse entry in the variant's
+  # settings.json (after the destructive-delete hook). It is an inline
+  # `bash -c '...'` command, not a separate script file, so we write it
+  # back out to a temp script to invoke it directly.
+  HOOK_CMD="$(jq -r '.hooks.PreToolUse[1].hooks[0].command' "$SETTINGS")"
+  HOOK_WRAP="$HOME/push-hook-wrap.sh"
+  printf '%s\n' "$HOOK_CMD" > "$HOOK_WRAP"
+
+  # Helper: build tool-input JSON for a command string, feed it to the hook,
+  # and return the exit code. The runtime exit contract is 2 = blocked,
+  # 0 = allowed.
+  run_push_hook() {
+    local cmd="$1"
+    local input
+    input="$(jq -n --arg c "$cmd" '{tool_input:{command:$c}}')"
+    set +e
+    echo "$input" | bash "$HOOK_WRAP" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build the dangerous-phrase strings at runtime so this test file itself
+  # does not contain literal `git push origin main` — otherwise running
+  # ci-test.sh under Claude Code would trip the hook that this very test
+  # is exercising. (That false-positive is why this scenario exists.)
+  B="main"
+  M="master"
+  P="production"
+
+  echo "  -- cases that MUST block --"
+  assert_eq "$(run_push_hook "git push origin $B")"                  "2" "direct push to main blocked"
+  assert_eq "$(run_push_hook "git push --force origin $B")"          "2" "force push to main blocked"
+  assert_eq "$(run_push_hook "git push origin $M")"                  "2" "push to master blocked"
+  assert_eq "$(run_push_hook "git push origin $P")"                  "2" "push to production blocked"
+  assert_eq "$(run_push_hook "git fetch && git push origin $B")"     "2" "chained fetch && push blocked"
+  assert_eq "$(run_push_hook "git status; git push origin $B")"      "2" "semicolon-chained push blocked"
+  assert_eq "$(run_push_hook "(git push origin $B)")"                "2" "subshell-wrapped push blocked"
+
+  echo "  -- cases that MUST allow (previously false-positived) --"
+  assert_eq "$(run_push_hook "gh pr create --base $B --body \"see git push origin $B\"")" "0" "PR body containing trigger phrase allowed"
+  assert_eq "$(run_push_hook "echo \"git push origin $B is dangerous\"")"                 "0" "echo commentary allowed"
+  assert_eq "$(run_push_hook "grep 'git push origin $B' history.log")"                    "0" "grep searching for phrase allowed"
+  assert_eq "$(run_push_hook "git push origin feat/foo")"                                 "0" "feature branch push allowed"
+  assert_eq "$(run_push_hook "git push origin main-feature-branch")"                      "0" "branch name with 'main' prefix allowed"
+  assert_eq "$(run_push_hook "git log $B..HEAD")"                                         "0" "git log (non-push) allowed"
+
+  finish
+}
+
 # --- Dispatch ---
 
 echo "Scenario: $SCENARIO"
@@ -455,9 +511,10 @@ case "$SCENARIO" in
   full-roundtrip)    test_full_roundtrip ;;
   merge-existing)    test_merge_existing ;;
   scan-commit)       test_scan_commit ;;
+  push-hook)         test_push_hook ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook"
     exit 1
     ;;
 esac

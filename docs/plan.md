@@ -54,7 +54,8 @@ Ship a ready-to-use security configuration package for Claude Code. Two variants
 - [x] `scan-commit.sh` in both variants — intercepts `git commit` Bash calls, runs `git diff --cached -U0` through the shared secret regex set, blocks on match with pattern name(s) + staged file list. Word-boundary matcher avoids intercepting `git commit-tree`.
 - [x] `patterns/secrets.json` — single source of truth for credential regexes, loaded by both `scan-secrets.sh` and `scan-commit.sh` via `jq --slurpfile`. Closes WS2 for the secrets pattern set (injection signatures and dangerous-command patterns remain embedded).
 - [x] `install.sh` copies patterns + scan-commit; `uninstall.sh` removes `~/.claude/hooks/scan-commit/` and `~/.claude/hooks/patterns/`.
-- [x] CI suite 7 → 8 scenarios (58 → 76 assertions): adds `scan-commit` functional test covering 7 cases — clean allow, AWS key block, `git status` pass-through, `commit-tree` plumbing safety, `git add && git commit` chained form, heredoc-wrapped message, and fail-open when patterns file is missing.
+- [x] CI suite 7 → 9 scenarios (58 → 89 assertions): adds `scan-commit` functional test (7 cases: clean allow, AWS key block, `git status` pass-through, `commit-tree` plumbing safety, chained `add && commit`, heredoc-wrapped message, fail-open on missing patterns file) and `push-hook` functional test (13 cases covering the tightened direct-push regex).
+- [x] Direct-push hook regex tightened to anchor `git push` at a command-boundary position. Fixes false positive on `gh pr create --body "... git push origin main ..."` encountered when creating this release's own PR. Trailing branch boundary also tightened so `main-feature-branch` no longer triggers. Tradeoff: `sudo git push origin main` no longer matches.
 - [x] Docs updated: CHANGELOG, both SETUP.md, root CLAUDE.md.
 
 ## Next Up
