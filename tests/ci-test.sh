@@ -575,6 +575,83 @@ test_push_hook() {
   finish
 }
 
+test_bip39_scan() {
+  echo "=== bip39-scan: Wordlist-based BIP39 detection in scan-secrets hook ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh"
+  WORDLIST="$CLAUDE_DIR/hooks/patterns/bip39-english.txt"
+  assert_file_exists "$HOOK" "scan-secrets hook installed"
+  assert_file_exists "$WORDLIST" "bip39 wordlist installed"
+
+  # Helper: feed a prompt through the hook, return its exit code. Exit 2 =
+  # blocked, 0 = allowed.
+  run_scan() {
+    local prompt="$1"
+    local input
+    input="$(jq -n --arg p "$prompt" '{prompt:$p}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build fixtures at runtime so this test file itself does not contain any
+  # literal 12-word wordlist run or AWS access key. Committing literals would
+  # trip the very scan-commit hook installed above whenever someone edits
+  # this file. (Same reason test_push_hook builds its danger strings at
+  # runtime from parts; see the comment near its `B="main"` block.)
+
+  # Read the first 12 (and first 11) words of the installed wordlist. The
+  # list is alphabetical in the BIP39 spec; this keeps the file itself free
+  # of a literal wordlist run, so editing this script never trips the hook
+  # we are testing.
+  MNEMONIC_WORDS="$(head -12 "$WORDLIST" | tr '\n' ' ')"
+  ELEVEN_WORDS="$(head -11 "$WORDLIST" | tr '\n' ' ')"
+  # Concatenate the AKIA prefix with the example-key suffix at runtime so no
+  # substring in this source file matches \bAKIA[0-9A-Z]{16}\b.
+  AWS_KEY="AKIA$(printf '%s' 'IOSFODNN7EXAMPLE')"
+
+  # Case 1: ordinary English prose with a long run of short words. This was
+  # the regression the old "12+ short words" regex produced - natural text
+  # was blocked because it had many short common words in a row. With the
+  # wordlist check, this must now pass.
+  PROSE="Alright, I think I want to check if we can run the dotfile sync command and then find out what news apply to this machine."
+  assert_eq "$(run_scan "$PROSE")" "0" "prose with many short words allowed"
+
+  # Case 2: a real 12-word BIP39 mnemonic embedded in a sentence. All 12
+  # words come from the wordlist, so the sliding-window check hits and the
+  # hook must block.
+  MNEMONIC_PROMPT="My test phrase: ${MNEMONIC_WORDS}- do not use."
+  assert_eq "$(run_scan "$MNEMONIC_PROMPT")" "2" "real 12-word BIP39 mnemonic blocked"
+
+  # Case 3: exactly 11 wordlist words followed by a non-wordlist word.
+  # The 12-word sliding window never lands on an all-wordlist run, so the
+  # hook must allow. This guards the exact threshold. "zzznotaword" is a
+  # deliberate non-wordlist placeholder (no BIP39 word starts with zzz).
+  NEAR_MISS="${ELEVEN_WORDS}zzznotaword"
+  assert_eq "$(run_scan "$NEAR_MISS")" "0" "11 wordlist words + 1 non-wordlist word allowed"
+
+  # Case 4: wordlist file missing must fail open (exit 0). The secrets.json
+  # pattern pass still runs; only the BIP39 check is skipped. A broken or
+  # partial install should never wedge every prompt.
+  WORDLIST_BAK="$WORDLIST.bak"
+  mv "$WORDLIST" "$WORDLIST_BAK"
+  assert_eq "$(run_scan "$MNEMONIC_PROMPT")" "0" "missing wordlist fails open (BIP39 check skipped)"
+  mv "$WORDLIST_BAK" "$WORDLIST"
+
+  # Case 5: sanity - the secrets.json regex pass still fires when the
+  # wordlist path is present but the prompt contains a non-BIP39 secret.
+  # (Guards against a refactor that accidentally disables the first pass.)
+  AWS_PROMPT="my key is $AWS_KEY please rotate"
+  assert_eq "$(run_scan "$AWS_PROMPT")" "2" "AWS key still blocked alongside BIP39 logic"
+
+  finish
+}
+
 # --- Dispatch ---
 
 echo "Scenario: $SCENARIO"
@@ -591,9 +668,10 @@ case "$SCENARIO" in
   scan-commit)       test_scan_commit ;;
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
+  bip39-scan)        test_bip39_scan ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan"
     exit 1
     ;;
 esac

@@ -113,7 +113,8 @@ fi
 PATTERNS_DIR="$CLAUDE_DIR/hooks/patterns"
 mkdir -p "$PATTERNS_DIR"
 cp "$SCRIPT_DIR/patterns/secrets.json" "$PATTERNS_DIR/secrets.json"
-echo "  Installed patterns/secrets.json → ~/.claude/hooks/patterns/"
+cp "$SCRIPT_DIR/patterns/bip39-english.txt" "$PATTERNS_DIR/bip39-english.txt"
+echo "  Installed patterns/secrets.json + bip39-english.txt → ~/.claude/hooks/patterns/"
 
 # --- Both variants: scan-secrets UserPromptSubmit hook ---
 

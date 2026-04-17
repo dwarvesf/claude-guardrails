@@ -14,6 +14,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATTERNS_FILE="${CLAUDE_GUARDRAILS_PATTERNS:-$SCRIPT_DIR/../patterns/secrets.json}"
+BIP39_WORDLIST="${CLAUDE_GUARDRAILS_BIP39_WORDLIST:-$SCRIPT_DIR/../patterns/bip39-english.txt}"
 
 INPUT="$(cat)"
 
@@ -38,6 +39,37 @@ HITS="$(
     | map(.n) | .[]
   '
 )"
+
+# BIP39 wordlist pass. A real mnemonic is 12+ consecutive words drawn from
+# the 2048-word English list, which deliberately excludes common stop-words
+# ("the", "and", "for", ...). Checking set membership avoids the false
+# positives the old "12+ short words" regex produced on ordinary prose.
+if [[ -f "$BIP39_WORDLIST" ]]; then
+  BIP39_HIT="$(
+    echo "$INPUT" | jq -r --rawfile wl "$BIP39_WORDLIST" '
+      (.prompt // "" | ascii_downcase) as $p |
+      [$p | scan("\\b[a-z]{3,8}\\b")] as $tokens |
+      ($wl | split("\n") | map(select(length >= 3 and length <= 8))
+        | reduce .[] as $w ({}; .[$w] = true)) as $set |
+      ($tokens | length) as $n |
+      if $n < 12 then empty
+      else
+        [range(0; $n - 11) | . as $i |
+         select([range($i; $i + 12) | $set[$tokens[.]]] | all)]
+        | if length > 0
+          then "BIP39 mnemonic (12+ consecutive wordlist words)"
+          else empty end
+      end
+    '
+  )"
+  if [[ -n "$BIP39_HIT" ]]; then
+    if [[ -n "$HITS" ]]; then
+      HITS="$HITS"$'\n'"$BIP39_HIT"
+    else
+      HITS="$BIP39_HIT"
+    fi
+  fi
+fi
 
 if [[ -z "$HITS" ]]; then
   exit 0

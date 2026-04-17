@@ -70,6 +70,13 @@ HITS="$(
   ' <<< "$ADDED"
 )"
 
+# Note: the BIP39 wordlist check lives only in scan-secrets.sh (the prompt
+# scanner), not here. Running it on committed code produces too many false
+# positives on legitimate content - documentation, comments, BIP39 test
+# fixtures, and the wordlist file itself. The labeled-secret regex in
+# patterns/secrets.json already catches `mnemonic: "..."` / `seed_phrase: "..."`
+# assignments, which is the realistic commit-time leak path.
+
 if [[ -z "$HITS" ]]; then
   exit 0
 fi
