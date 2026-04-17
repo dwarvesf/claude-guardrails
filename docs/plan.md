@@ -111,7 +111,7 @@ patterns/
 Benefits:
 - PRs that add a pattern are 1-line diffs, not buried in JSON
 - Lower barrier for community contributions
-- Enables future `npx claude-guardrails update` (pull new patterns without reinstalling)
+- Enables future `npx @dwarvesf/claude-guardrails update` (pull new patterns without reinstalling)
 - Install script reads from data files to build settings.json
 
 Tradeoff: adds build/generation step to install. Settings.json is no longer self-contained.

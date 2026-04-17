@@ -4,7 +4,7 @@
 #        claude-guardrails --help | --version
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 # Resolve symlinks to find the real package directory (handles npx symlinks)
 SOURCE="${BASH_SOURCE[0]}"
@@ -29,13 +29,13 @@ Usage:
   claude-guardrails --version             Show version
 
 Variants:
-  lite   3 hooks, 15 deny rules — for trusted projects (default)
-  full   5 hooks + prompt injection scanner — for untrusted codebases
+  lite   4 PreToolUse hooks, 21 deny rules — for trusted projects (default)
+  full   6 PreToolUse hooks + secret/injection scanners — for untrusted codebases
 
 Examples:
-  npx claude-guardrails install
-  npx claude-guardrails install full
-  npx claude-guardrails uninstall
+  npx @dwarvesf/claude-guardrails install
+  npx @dwarvesf/claude-guardrails install full
+  npx @dwarvesf/claude-guardrails uninstall
 
 More info: https://github.com/dwarvesf/claude-guardrails
 EOF

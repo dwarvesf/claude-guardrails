@@ -29,10 +29,10 @@ brew install jq          # macOS
 # sudo apt install jq    # Debian/Ubuntu
 
 # Lite (4 hooks, 21 deny rules — for trusted projects)
-npx claude-guardrails install
+npx @dwarvesf/claude-guardrails install
 
 # Full (6 hooks + prompt injection scanner — for untrusted codebases)
-npx claude-guardrails install full
+npx @dwarvesf/claude-guardrails install full
 ```
 
 The script merges into your existing `~/.claude/settings.json` (backing it up first) and is safe to run repeatedly.
@@ -67,10 +67,10 @@ If you prefer to install manually, see [`full/SETUP.md`](full/SETUP.md) for step
 
 ```bash
 # Remove lite guardrails
-npx claude-guardrails uninstall
+npx @dwarvesf/claude-guardrails uninstall
 
 # Remove full guardrails
-npx claude-guardrails uninstall full
+npx @dwarvesf/claude-guardrails uninstall full
 ```
 
 <details>

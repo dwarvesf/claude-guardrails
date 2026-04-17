@@ -61,7 +61,7 @@ Used by both `scan-secrets.sh` (prompt) and `scan-commit.sh` (staged diff). Any 
 
 ### 7. Dependencies & distribution
 - [ ] Run `npm audit` on package.json (should stay zero-dep)
-- [ ] Verify `npx claude-guardrails install` works on fresh machine
+- [ ] Verify `npx @dwarvesf/claude-guardrails install` works on fresh machine
 - [ ] Verify `jq` version compatibility (test on latest macOS + Ubuntu LTS) — `scan-secrets.sh` and `scan-commit.sh` both depend on Oniguruma regex support in jq
 - [ ] Check if npm package needs version bump
 

@@ -1,6 +1,6 @@
 {
-  "name": "claude-guardrails",
-  "version": "0.3.6",
+  "name": "@dwarvesf/claude-guardrails",
+  "version": "0.4.0",
   "description": "Hardened security configuration for Claude Code — deny rules, hooks, and prompt injection defense out of the box",
   "bin": {
     "claude-guardrails": "bin/claude-guardrails"

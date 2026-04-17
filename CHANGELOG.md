@@ -2,6 +2,33 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] — 2026-04-17
+
+**Breaking change to the install command.** The npm package has moved from `claude-guardrails` (owned by the `thug` user account) to `@dwarvesf/claude-guardrails` (owned by the Dwarves Foundation organization). The GitHub repo URL is unchanged.
+
+### Migration
+
+Any user running the old install command will continue to get v0.3.0 from the unscoped package (which ships the broken `$schema` URL — see #6). Switch to:
+
+```
+npx @dwarvesf/claude-guardrails install        # lite, default
+npx @dwarvesf/claude-guardrails install full   # full
+npx @dwarvesf/claude-guardrails uninstall      # or uninstall full
+```
+
+The unscoped package is deprecated at v0.3.0 with a pointer message; users will see the deprecation warning on install.
+
+### Changed
+- `package.json` name: `claude-guardrails` → `@dwarvesf/claude-guardrails`.
+- Version: 0.3.6 → 0.4.0 (minor bump, install-command break is a breaking UX change).
+- `bin/claude-guardrails` — hardcoded `VERSION` bumped to 0.4.0; Examples section updated to show scoped `npx` command; variant descriptions updated from the stale "3 hooks / 5 hooks" to current "4 PreToolUse hooks / 6 PreToolUse hooks + secret+injection scanners."
+- `README.md` Quick Start and Uninstall sections use the scoped command.
+- `docs/maintenance.md` quarterly-review checklist points at the scoped `npx` command.
+
+### Ownership
+- npm package owned by the `dwarvesf` npm organization (`thug` is a member; add more team members via https://www.npmjs.com/settings/dwarvesf/members).
+- Unchanged: GitHub repo (`dwarvesf/claude-guardrails`), CLI bin name (`claude-guardrails`), all file paths, settings.json layout.
+
 ## [0.3.6] — 2026-04-17
 
 Follow-up to v0.3.5. The previous release fixed the `$schema` bug for anyone re-running the installer (the jq merge always prefers the new file's value), but the fix happened silently — a user who ran v0.3.6 install after months on a broken v0.3.0–v0.3.4 install had no way to know their guardrails had been inactive the whole time. This release surfaces that state so users understand the remediation.
