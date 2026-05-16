@@ -575,6 +575,60 @@ test_push_hook() {
   finish
 }
 
+test_escalation_hook() {
+  echo "=== escalation-hook: Functional test of the permission-escalation guardrail ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" full
+
+  # The permission-escalation hook is an inline `bash -c '...'` command in
+  # full/settings.json. We extract it out and invoke it directly the same
+  # way test_push_hook does. It is the 5th PreToolUse entry (index 4):
+  #   0=destructive-delete, 1=direct-push, 2=pipe-to-shell,
+  #   3=data-exfiltration, 4=permission-escalation, 5=scan-commit.
+  HOOK_CMD="$(jq -r '.hooks.PreToolUse[4].hooks[0].command' "$SETTINGS")"
+  HOOK_WRAP="$HOME/escalation-hook-wrap.sh"
+  printf '%s\n' "$HOOK_CMD" > "$HOOK_WRAP"
+
+  run_escalation_hook() {
+    local cmd="$1"
+    local input
+    input="$(jq -n --arg c "$cmd" '{tool_input:{command:$c}}')"
+    set +e
+    echo "$input" | bash "$HOOK_WRAP" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build the dangerous flag strings at runtime so this test file itself
+  # does not contain literal `--dangerously-skip-permissions` — otherwise
+  # running ci-test.sh under Claude Code would trip the very hook this
+  # scenario is exercising. (Same trick as test_push_hook.)
+  DD="--"
+  SKIP="${DD}dangerously-skip-permissions"
+  BYPASS="${DD}bypass-permissions"
+
+  echo "  -- cases that MUST block --"
+  # Regression guard for the upstream bug where `grep "--..."` was treated as
+  # a flag, causing the hook to silently no-op on the exact string it was
+  # meant to catch. Fix: `grep -e "--..."` so `--` is parsed as the pattern.
+  assert_eq "$(run_escalation_hook "claude $SKIP")"                "2" "claude --dangerously-skip-permissions blocked"
+  assert_eq "$(run_escalation_hook "claude $BYPASS")"              "2" "claude --bypass-permissions blocked"
+  assert_eq "$(run_escalation_hook "echo foo && claude $SKIP")"    "2" "chained command with escalation flag blocked"
+  assert_eq "$(run_escalation_hook "CLAUDE_FLAG=$SKIP env")"       "2" "escalation flag inside env-var assignment blocked"
+
+  echo "  -- cases that MUST allow --"
+  # The workspace launcher uses `--permission-mode bypassPermissions`, which
+  # is a *different* CLI surface (`--permission-mode <value>`) and must not
+  # trip this hook.
+  assert_eq "$(run_escalation_hook "claude --permission-mode bypassPermissions")" "0" "permission-mode bypassPermissions allowed"
+  assert_eq "$(run_escalation_hook "git status")"                  "0" "unrelated command allowed"
+  assert_eq "$(run_escalation_hook "echo hello world")"            "0" "echo allowed"
+
+  finish
+}
+
 test_bip39_scan() {
   echo "=== bip39-scan: Wordlist-based BIP39 detection in scan-secrets hook ==="
   clean_claude_dir
@@ -685,11 +739,12 @@ case "$SCENARIO" in
   merge-existing)    test_merge_existing ;;
   scan-commit)       test_scan_commit ;;
   push-hook)         test_push_hook ;;
+  escalation-hook)   test_escalation_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, escalation-hook, schema-remediation, bip39-scan"
     exit 1
     ;;
 esac
