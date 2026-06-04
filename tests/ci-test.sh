@@ -670,6 +670,54 @@ test_bip39_scan() {
   finish
 }
 
+test_wallet_key_regex() {
+  echo "=== wallet-key-regex: WIF + xprv detection via secrets.json ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh"
+  PATTERNS="$CLAUDE_DIR/hooks/patterns/secrets.json"
+  assert_file_exists "$HOOK" "scan-secrets hook installed"
+  assert_file_exists "$PATTERNS" "patterns file installed"
+
+  run_scan() {
+    local prompt="$1" input
+    input="$(jq -n --arg p "$prompt" '{prompt:$p}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build wallet-key vectors at runtime so this source file holds no literal key
+  # that would trip the very WIF/xprv rules under test (same discipline as the
+  # AWS key in test_bip39_scan). Filler char 'G' is Base58 but NOT a hex digit,
+  # so a vector never accidentally trips the 64-hex private-key rule.
+  f() { printf 'G%.0s' $(seq "$1"); }
+  WIF_U="5$(f 50)"          # 51 chars: mainnet uncompressed WIF shape
+  WIF_C="K$(f 51)"          # 52 chars: compressed WIF shape
+  XPRV="xprv$(f 107)"       # 111 chars: BIP-32 extended private key shape
+  XPUB="xpub$(f 107)"       # extended PUBLIC key: must NOT match
+  IPFS="Qm$(f 44)"          # IPFS CIDv0, leading Q: must NOT match WIF
+  ADDR="1$(f 33)"           # P2PKH address, leading 1: must NOT match WIF
+  B58_OTHER="9$(f 50)"      # 51-char Base58 not starting 5/K/L: must NOT match
+
+  # TP: real wallet private keys must block (exit 2).
+  assert_eq "$(run_scan "my backup is $WIF_U stored")" "2" "WIF uncompressed blocked"
+  assert_eq "$(run_scan "wif $WIF_C")" "2" "WIF compressed blocked"
+  assert_eq "$(run_scan "root $XPRV here")" "2" "xprv extended private key blocked"
+
+  # FP: lookalikes must pass clean (exit 0).
+  assert_eq "$(run_scan "watch only xpub $XPUB ok")" "0" "xpub extended public key allowed"
+  assert_eq "$(run_scan "pinned at $IPFS thanks")" "0" "IPFS CIDv0 allowed"
+  assert_eq "$(run_scan "pay to $ADDR please")" "0" "P2PKH address allowed"
+  assert_eq "$(run_scan "ref id $B58_OTHER end")" "0" "non-5KL Base58 string allowed"
+
+  finish
+}
+
 # --- Dispatch ---
 
 echo "Scenario: $SCENARIO"
@@ -687,9 +735,10 @@ case "$SCENARIO" in
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
+  wallet-key-regex)  test_wallet_key_regex ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan, wallet-key-regex"
     exit 1
     ;;
 esac
