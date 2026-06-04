@@ -144,3 +144,10 @@ Net: design is FP-safe. Spec §6/§7/§9 corrected to match validated behavior.
 - Left untouched (verified not drift): docs/plan.md:35 (frozen v0.3.1 entry),
   CLAUDE.md:29 (wordlist-file description), maintenance.md (deny counts 21/40
   unchanged), README deny-rule table (deny rules unchanged; I added pattern rules).
+
+## 2026-06-05 Pre-merge: wire wallet-key-regex into CI
+
+- Caught at merge time: `.github/workflows/test.yml` matrix listed every scenario
+  except the new `wallet-key-regex`, so the new test passed locally but was never
+  gated in CI. Added it to the matrix. (Review/ship missed this; the CI matrix is
+  a second place the scenario list must be kept in sync with ci-test.sh's `case`.)
