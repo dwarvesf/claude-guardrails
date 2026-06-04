@@ -16,7 +16,7 @@ Two variants are provided:
 
 Each variant contains:
 - `settings.json` — Claude Code global settings with `permissions.deny` rules (blocking Read/Edit on sensitive paths like SSH keys, AWS creds, .env files) and `hooks.PreToolUse` entries (blocking dangerous bash patterns before execution)
-- `scan-secrets.sh` — UserPromptSubmit hook (bash + jq) that regex-scans prompts for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases) and blocks submission before the prompt reaches the model or is persisted to the session transcript. Uses jq's Oniguruma regex engine for lookbehind support — no extra runtime required.
+- `scan-secrets.sh` — UserPromptSubmit hook (bash + jq) that regex-scans prompts for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, Bitcoin WIF / BIP-32 xprv wallet keys) and blocks submission before the prompt reaches the model or is persisted to the session transcript. Uses jq's Oniguruma regex engine for lookbehind support — no extra runtime required.
 - `scan-commit.sh` — PreToolUse hook (bash + jq) that intercepts `Bash` calls, detects `git commit`, runs `git diff --cached -U0` through the same pattern set as `scan-secrets.sh`, and blocks on match. Closes the gap where Claude writes a secret into code and then commits it (the prompt scanner only catches pasted creds).
 - `CLAUDE-security-section.md` — Security rules to merge into a user's `~/.claude/CLAUDE.md`
 - `SETUP.md` — Installation and usage guide

@@ -78,7 +78,7 @@ Then add the UserPromptSubmit hook entry to your `~/.claude/settings.json`:
 }
 ```
 
-This hook scans every prompt you submit for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, etc.) and blocks submission if a pattern matches. The prompt never reaches the model and is never persisted to the session transcript at `~/.claude/projects/.../*.jsonl`. Pure bash + jq — no additional runtime required beyond the `jq` you already installed for the PreToolUse hooks.
+This hook scans every prompt you submit for live credentials (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, Bitcoin WIF / BIP-32 xprv wallet keys, etc.) and blocks submission if a pattern matches. The prompt never reaches the model and is never persisted to the session transcript at `~/.claude/projects/.../*.jsonl`. Pure bash + jq — no additional runtime required beyond the `jq` you already installed for the PreToolUse hooks.
 
 ### Step 4: Install Prompt Injection Defender Hook
 
@@ -181,7 +181,7 @@ Enforces filesystem and network restrictions at the OS level. Bash commands cann
 
 ### Layer 4: UserPromptSubmit Secret Scanner (`scan-secrets.sh`)
 
-Runs on every prompt you submit. Regex-matches high-confidence credential patterns (AWS access keys, GitHub/Anthropic/OpenAI/Stripe/Slack tokens, PEM private-key headers, BIP39 mnemonic phrases, hex private keys, generic `API_KEY=value` assignments) and blocks the prompt from reaching the model if any match. The prompt is also never persisted to the session transcript (`~/.claude/projects/.../*.jsonl`), so a pasted credential that triggers the block does not end up on disk.
+Runs on every prompt you submit. Regex-matches high-confidence credential patterns (AWS access keys, GitHub/Anthropic/OpenAI/Stripe/Slack tokens, PEM private-key headers, BIP39 mnemonic phrases, hex private keys, Bitcoin WIF / BIP-32 xprv wallet keys, generic `API_KEY=value` assignments) and blocks the prompt from reaching the model if any match. The prompt is also never persisted to the session transcript (`~/.claude/projects/.../*.jsonl`), so a pasted credential that triggers the block does not end up on disk.
 
 **Limitation:** Regex. Novel credential formats will miss, and the generic-assignment pattern can miss values under 16 chars. Rotates must still be done manually — the hook blocks the paste but cannot invalidate what was leaked.
 

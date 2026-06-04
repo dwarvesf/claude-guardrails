@@ -133,3 +133,14 @@ Net: design is FP-safe. Spec §6/§7/§9 corrected to match validated behavior.
   (B1/B7/B9/W1/allow all unchanged) -> atomic dotfiles commit de35d3c. Patterns
   file is reproducible from claude-guardrails install (repo has the rules).
 - Caveat: running sessions need /clear to pick up the new secret-guard.sh.
+
+## 2026-06-05 Docs backfill (kit:docs)
+
+- Drift: 5 enumerated scan-secrets credential-coverage lists named BIP39 but
+  predated WIF/xprv. Updated README.md, CLAUDE.md, lite/SETUP.md, full/SETUP.md
+  (two lists: ~L81 and ~L184) to append "Bitcoin WIF / BIP-32 xprv wallet keys".
+- doc-verifier round 1 caught 2 I missed (CLAUDE.md:19, full/SETUP.md:184);
+  fixed; round 2 PASS (8 claims, 0 contradictions).
+- Left untouched (verified not drift): docs/plan.md:35 (frozen v0.3.1 entry),
+  CLAUDE.md:29 (wordlist-file description), maintenance.md (deny counts 21/40
+  unchanged), README deny-rule table (deny rules unchanged; I added pattern rules).
