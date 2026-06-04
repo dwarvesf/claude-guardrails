@@ -247,7 +247,7 @@ Atomic, each <5 files. Task 3 depends on Task 1 (rules must be final before port
 
 - [x] Task 1 -- DONE (commit bf89cca, verified: wallet-key-regex 9/9)
 - [x] Task 2 -- DONE (verified: bip39-scan 16/16, full suite green)
-- [ ] Task 3 -- HELD for operator confirmation (personal-layer/chezmoi port)
+- [x] Task 3 -- DONE (personal layer, live): WIF/xprv rules + BIP-39 wiring
 - [x] Task 4 -- DONE (personal layer): B9 secret-read-to-disk warning
 
 ## 11a. Amendment: secret-read captured to disk (B9, personal layer)

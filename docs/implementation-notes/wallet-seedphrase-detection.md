@@ -110,3 +110,26 @@ Net: design is FP-safe. Spec §6/§7/§9 corrected to match validated behavior.
   live smoke -> atomic commit in dotfiles (S-64 watcher). dotfiles 58abcd9.
 - This is personal-layer only; product (claude-guardrails) has no op-verb Bash
   guard. Upstream candidate. Recorded as SPEC §11a amendment.
+
+## 2026-06-05 Task 3 done (personal-layer port, live)
+
+- Architecture finding: the personal `~/.claude/hooks/patterns/{secrets.json,
+  bip39-english.txt}` are installed by claude-guardrails (NOT chezmoi); the
+  custom chezmoi `secret-guard.sh` consumes them. So the repo IS the patterns
+  source of truth. Deployed vs repo diff was EXACTLY the 2 new rules (existing 11
+  byte-identical), so refreshing deployed from repo was purely additive.
+- Part 1 (WIF/xprv): `command cp -f` repo secrets.json -> deployed (cp is aliased
+  to cp -i; the bare cp silently declined, per the known alias gotcha). 13 rules
+  live; WIF/xprv block in B7 (Bash) + W1 (Edit/Write); xpub passes.
+- Part 2 (BIP-39): the wordlist was already shipped but UNUSED by secret-guard.sh.
+  Added bip39_hit() helper (verbatim product jq filter) and called it in B7 + W1,
+  reusing the B7/W1 rule codes (a seed phrase is a literal credential). Blocks
+  12+ whitespace-run mnemonics in commands + file writes.
+- FP decisions: prose docs (this file, the SPEC) pass. Writing a 2048-word
+  dictionary file BLOCKS (newline = whitespace run) -- accepted as a rare,
+  bypass-marker-escapable FP rather than adding a fuzzy path exemption an
+  attacker could name-spoof. Fail-open if wordlist missing.
+- Deploy: chezmoi apply secret-guard.sh -> cmp parity -> regression sweep
+  (B1/B7/B9/W1/allow all unchanged) -> atomic dotfiles commit de35d3c. Patterns
+  file is reproducible from claude-guardrails install (repo has the rules).
+- Caveat: running sessions need /clear to pick up the new secret-guard.sh.
