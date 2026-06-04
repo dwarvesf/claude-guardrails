@@ -25,7 +25,7 @@ Minimal security config for daily dev work. Three layers, near-zero friction.
 - `git commit` when the staged diff contains a credential pattern (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, etc.) — same regex set as the prompt scanner
 
 **UserPromptSubmit hook (your typed prompts):**
-- Live credentials pasted into the prompt (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, `API_KEY=value` assignments)
+- Live credentials pasted into the prompt (AWS keys, GitHub/Anthropic/OpenAI tokens, PEM blocks, BIP39 phrases, Bitcoin WIF / BIP-32 xprv wallet keys, `API_KEY=value` assignments)
 - Blocks submission so the secret never hits the model or the on-disk session transcript
 
 **That's it.** No prompt injection scanner, no exfiltration detector, no PostToolUse hooks. Those add noise for internal projects where you trust the codebase.

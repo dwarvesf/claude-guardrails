@@ -667,6 +667,90 @@ test_bip39_scan() {
   MNEMONIC_WRAPPED="$(head -12 "$WORDLIST")"
   assert_eq "$(run_scan "$MNEMONIC_WRAPPED")" "2" "newline-wrapped 12-word mnemonic still blocked"
 
+  # Case 8: full 24-word mnemonic. Guards a regression that caps the run length.
+  M24="$(head -24 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "seed: $M24 keep")" "2" "24-word mnemonic blocked"
+
+  # Case 9: 4-per-line wallet grid (whitespace-only separators incl. newlines).
+  GRID="$(head -12 "$WORDLIST" | paste -d' ' - - - -)"
+  assert_eq "$(run_scan "$GRID")" "2" "4-per-line whitespace grid blocked"
+
+  # Case 10: wordlist words split into two sub-12 runs by a non-wordlist word.
+  # Longest run is 11, so the 12-window never lands on an all-wordlist run.
+  RUN11="$(head -11 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "${RUN11}zzqxnotaword ${RUN11}")" "0" "two sub-12 wordlist runs allowed"
+
+  # Case 11: a >8-letter token in the middle cannot be part of a 3-8-letter run,
+  # so it breaks the consecutive run into two short halves.
+  SIX="$(head -6 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "${SIX}toolongword ${SIX}done now here")" "0" "long token breaks the run"
+
+  # Case 12: wordlist words joined by underscores are one token (no whitespace run).
+  USCORE="$(head -12 "$WORDLIST" | tr '\n' '_')"
+  assert_eq "$(run_scan "id ${USCORE} end")" "0" "underscore-joined words allowed"
+
+  # Case 13 (documented v1 LIMITATION): numbered-list mnemonics are NOT caught -
+  # digit+dot enumerators break the whitespace run. Asserts CURRENT behavior; a
+  # future Phase-2 fix flips this to 2 deliberately (see SPEC R5).
+  NUMBERED="$(head -12 "$WORDLIST" | awk '{printf "%d. %s ", NR, $0}')"
+  assert_eq "$(run_scan "$NUMBERED")" "0" "numbered-list mnemonic NOT caught (v1 limitation)"
+
+  # Case 14: a ~10k-word prompt must scan without catastrophic backtracking (ReDoS
+  # guard for the quantified run regex). We assert timing only, not the verdict.
+  PERF="$(awk -v w="$(head -8 "$WORDLIST" | tr '\n' ' ')" 'BEGIN{for(i=0;i<1300;i++)printf "%s ", w}')"
+  SECONDS=0
+  run_scan "$PERF" >/dev/null
+  PERF_FAST="$([ "$SECONDS" -lt 5 ] && echo yes || echo no)"
+  assert_eq "$PERF_FAST" "yes" "10k-word prompt scans in <5s (no ReDoS)"
+
+  finish
+}
+
+test_wallet_key_regex() {
+  echo "=== wallet-key-regex: WIF + xprv detection via secrets.json ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh"
+  PATTERNS="$CLAUDE_DIR/hooks/patterns/secrets.json"
+  assert_file_exists "$HOOK" "scan-secrets hook installed"
+  assert_file_exists "$PATTERNS" "patterns file installed"
+
+  run_scan() {
+    local prompt="$1" input
+    input="$(jq -n --arg p "$prompt" '{prompt:$p}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Build wallet-key vectors at runtime so this source file holds no literal key
+  # that would trip the very WIF/xprv rules under test (same discipline as the
+  # AWS key in test_bip39_scan). Filler char 'G' is Base58 but NOT a hex digit,
+  # so a vector never accidentally trips the 64-hex private-key rule.
+  f() { printf 'G%.0s' $(seq "$1"); }
+  WIF_U="5$(f 50)"          # 51 chars: mainnet uncompressed WIF shape
+  WIF_C="K$(f 51)"          # 52 chars: compressed WIF shape
+  XPRV="xprv$(f 107)"       # 111 chars: BIP-32 extended private key shape
+  XPUB="xpub$(f 107)"       # extended PUBLIC key: must NOT match
+  IPFS="Qm$(f 44)"          # IPFS CIDv0, leading Q: must NOT match WIF
+  ADDR="1$(f 33)"           # P2PKH address, leading 1: must NOT match WIF
+  B58_OTHER="9$(f 50)"      # 51-char Base58 not starting 5/K/L: must NOT match
+
+  # TP: real wallet private keys must block (exit 2).
+  assert_eq "$(run_scan "my backup is $WIF_U stored")" "2" "WIF uncompressed blocked"
+  assert_eq "$(run_scan "wif $WIF_C")" "2" "WIF compressed blocked"
+  assert_eq "$(run_scan "root $XPRV here")" "2" "xprv extended private key blocked"
+
+  # FP: lookalikes must pass clean (exit 0).
+  assert_eq "$(run_scan "watch only xpub $XPUB ok")" "0" "xpub extended public key allowed"
+  assert_eq "$(run_scan "pinned at $IPFS thanks")" "0" "IPFS CIDv0 allowed"
+  assert_eq "$(run_scan "pay to $ADDR please")" "0" "P2PKH address allowed"
+  assert_eq "$(run_scan "ref id $B58_OTHER end")" "0" "non-5KL Base58 string allowed"
+
   finish
 }
 
@@ -687,9 +771,10 @@ case "$SCENARIO" in
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
+  wallet-key-regex)  test_wallet_key_regex ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan, wallet-key-regex"
     exit 1
     ;;
 esac

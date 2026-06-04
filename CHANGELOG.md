@@ -2,6 +2,25 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-06-05
+
+Adds detection for two non-hex wallet private-key formats and hardens the BIP39 corpus. Until now the only crypto-key coverage was the 64-hex rule (which catches EVM keys incidentally) and the wordlist-based mnemonic scanner. Base58-encoded keys slipped through entirely. Both new rules lean on structured prefixes and fixed lengths, so they stay false-positive safe: `xpub` extended public keys, IPFS CIDs, P2PKH addresses, and non-`5/K/L` Base58 strings all pass clean.
+
+### Added
+
+- **`patterns/secrets.json`** - two rules: Bitcoin WIF private key (Base58, leading `5`/`K`/`L`, 51-52 chars) and BIP-32 extended private key (`xprv`/`yprv`/`zprv` + testnet `tprv`/`uprv`/`vprv`, ~111 chars). Both apply everywhere the shared pattern set is used: prompts (`scan-secrets.sh`), commits (`scan-commit.sh`), and the personal-layer command/file checks.
+- **New `wallet-key-regex` CI scenario** (9 assertions) - WIF + xprv block; xpub, IPFS CIDv0, P2PKH address, and non-`5KL` Base58 pass. Vectors are built at runtime from a non-hex Base58 filler so no literal key lands in the source.
+- **Seven `bip39-scan` CI cases** - 24-word mnemonic and 4-per-line whitespace grid must block; two-sub-12 runs, a long-token break, and underscore-joined words must pass; the numbered-list mnemonic limitation is pinned as a documented pass; and a 10k-word ReDoS timing guard. CI: 11 scenarios / 105 assertions -> 12 scenarios / 121 assertions.
+
+### Notes
+
+- **Numbered-list mnemonics** (`1. word 2. word ...`) are a known, documented gap: digit+dot enumerators break the whitespace run. A future enumerator-stripping pass would close it but adds false-positive surface, so it is deferred.
+- **Solana / raw Base58 keys** are intentionally out of scope: no structural prefix means no false-positive-safe regex.
+
+### Upgrade note
+
+Re-run `bash install.sh <variant>` (or `npx claude-guardrails install`) to pick up the new `patterns/secrets.json`.
+
 ## [0.3.8] - 2026-04-17
 
 Hotfix for v0.3.7. The wordlist-based BIP39 detector shipped in #9 replaced one false-positive regime with another: it tokenised prompts with `scan("\b[a-z]{3,8}\b")`, flattening punctuation out before counting runs, so any prose with 12+ BIP39 vocabulary words in a row got blocked. BIP39 wordlists include common English words (what, else, you, need, feel, that, ready, then, okay, ...), so a single user-reported sentence, "question. What else do you need? If you feel that's ready, then that's ready, okay.", tokenised to 13 wordlist hits and tripped the threshold.
