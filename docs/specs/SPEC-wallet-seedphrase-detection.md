@@ -310,3 +310,58 @@ from wallet-content detection, hence a separate control.
   wordlist run blocks by design, R4); numbered-list is a real gap (L1/R5).
 - 2026-06-05 Spec-validate (5-lens) added: Approaches considered (§2a), Failure
   modes (§10), R6-R9, and Task decomposition (§11). Marked VALIDATED.
+
+## Review
+Date: 2026-06-05 | Reviewer: /kit:review (security-detection focus)
+
+### Verdict: SHIP
+
+Regexes are correct, anchored, and not ReDoS-prone; no regression to the existing
+11 rules (additive, OR-matched; full suite green at 121 asserts). Findings are
+LOW test-hardening nits, not defects. Completeness: 8/10.
+
+### Findings
+
+**LOW: Case 14 perf-guard comment slightly overclaims (self-corrected during review)**
+- File: tests/ci-test.sh (Case 14, `PERF`)
+- Initial read flagged this MEDIUM ("tests a clean match, not a backtracking
+  near-miss"). On deeper analysis it is adequate: the wordlist-membership check
+  is a SEPARATE jq pass AFTER the `scan()` regex, so the scan regex (the only
+  ReDoS candidate) is fully exercised by any 10k short-token run, valid or not.
+  The current input does stress the expensive path; timing is dominated by the
+  scan, not the membership pass.
+- Residual nit: the comment says "ReDoS guard" without noting the scan/membership
+  split, so a reader could think it proves more than it does.
+- Fix (optional): reword the comment to "large-input linearity guard for the scan
+  regex". The NEW WIF/xprv rules are bounded single-class quantifiers (provably
+  linear) and need no perf test. Effort: S.
+
+**MEDIUM (known/accepted): WIF rule can FP on a 51-52 char Base58 token starting 5/K/L**
+- File: patterns/secrets.json (Bitcoin WIF rule)
+- What: a non-key Base58 blob of exactly that shape would block a prompt.
+- Why: real collisions are rare (BTC addresses are 26-35 char, lead 1/3/bc1),
+  but it is a block, not a warn.
+- Fix: if a real FP is reported, gate WIF behind a context word (priv/wif/key)
+  per spec R1. No code change now.
+- Effort: M (deferred).
+
+**LOW: Case 8 / Case 11 asserts are weaker than their comments claim**
+- File: tests/ci-test.sh
+- What: Case 8 ("24-word ... cap regression") blocks via any 12-window even if a
+  run-cap were introduced; Case 11 ("long token breaks run") passes whether or not
+  the break logic is correct, since the total run is <12 either way.
+- Why: the comments overstate what the asserts prove.
+- Fix: tighten the comments, or make the inputs sensitive to the specific
+  behavior. Effort: S.
+
+**LOW: EVM 64-hex (spec T1/T2) not asserted in wallet-key-regex**
+- What: Task 1 scoped the test to WIF/xprv (T3-T5); the EVM hex regression guard
+  from §6 lives only in the spec, not the test.
+- Why: the hex-64 rule is pre-existing and unchanged, so low risk; noted for
+  completeness. Fix: add a 64-hex TP assert if desired. Effort: S.
+
+### TODOs (open follow-ups, all non-blocking)
+- [ ] Reword Case 14 comment to "scan-regex linearity guard" (LOW, S).
+- [ ] Tighten Case 8 / Case 11 comments or inputs (LOW, S).
+- [ ] (If a real FP is reported) context-gate the WIF rule per R1 (MEDIUM, deferred).
+- [ ] (Optional) add EVM 64-hex regression assert to wallet-key-regex (LOW, S).
