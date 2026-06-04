@@ -1,6 +1,6 @@
 # SPEC: wallet-key + seedphrase detection (false-positive-safe)
 
-Status: VALIDATED (empirical corpus + kit 5-lens spec-validate; 2 defects + 7 review findings resolved)
+Status: SHIPPED v0.4.0 (product: PR #13). Personal-layer port (Tasks 3-4) live via dotfiles de35d3c/58abcd9.
 Date: 2026-06-05
 Repo: claude-guardrails (source of truth) + port to deployed personal hooks
 Owner: Han
