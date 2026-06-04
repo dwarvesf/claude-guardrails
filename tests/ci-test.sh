@@ -667,6 +667,42 @@ test_bip39_scan() {
   MNEMONIC_WRAPPED="$(head -12 "$WORDLIST")"
   assert_eq "$(run_scan "$MNEMONIC_WRAPPED")" "2" "newline-wrapped 12-word mnemonic still blocked"
 
+  # Case 8: full 24-word mnemonic. Guards a regression that caps the run length.
+  M24="$(head -24 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "seed: $M24 keep")" "2" "24-word mnemonic blocked"
+
+  # Case 9: 4-per-line wallet grid (whitespace-only separators incl. newlines).
+  GRID="$(head -12 "$WORDLIST" | paste -d' ' - - - -)"
+  assert_eq "$(run_scan "$GRID")" "2" "4-per-line whitespace grid blocked"
+
+  # Case 10: wordlist words split into two sub-12 runs by a non-wordlist word.
+  # Longest run is 11, so the 12-window never lands on an all-wordlist run.
+  RUN11="$(head -11 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "${RUN11}zzqxnotaword ${RUN11}")" "0" "two sub-12 wordlist runs allowed"
+
+  # Case 11: a >8-letter token in the middle cannot be part of a 3-8-letter run,
+  # so it breaks the consecutive run into two short halves.
+  SIX="$(head -6 "$WORDLIST" | tr '\n' ' ')"
+  assert_eq "$(run_scan "${SIX}toolongword ${SIX}done now here")" "0" "long token breaks the run"
+
+  # Case 12: wordlist words joined by underscores are one token (no whitespace run).
+  USCORE="$(head -12 "$WORDLIST" | tr '\n' '_')"
+  assert_eq "$(run_scan "id ${USCORE} end")" "0" "underscore-joined words allowed"
+
+  # Case 13 (documented v1 LIMITATION): numbered-list mnemonics are NOT caught -
+  # digit+dot enumerators break the whitespace run. Asserts CURRENT behavior; a
+  # future Phase-2 fix flips this to 2 deliberately (see SPEC R5).
+  NUMBERED="$(head -12 "$WORDLIST" | awk '{printf "%d. %s ", NR, $0}')"
+  assert_eq "$(run_scan "$NUMBERED")" "0" "numbered-list mnemonic NOT caught (v1 limitation)"
+
+  # Case 14: a ~10k-word prompt must scan without catastrophic backtracking (ReDoS
+  # guard for the quantified run regex). We assert timing only, not the verdict.
+  PERF="$(awk -v w="$(head -8 "$WORDLIST" | tr '\n' ' ')" 'BEGIN{for(i=0;i<1300;i++)printf "%s ", w}')"
+  SECONDS=0
+  run_scan "$PERF" >/dev/null
+  PERF_FAST="$([ "$SECONDS" -lt 5 ] && echo yes || echo no)"
+  assert_eq "$PERF_FAST" "yes" "10k-word prompt scans in <5s (no ReDoS)"
+
   finish
 }
 

@@ -80,3 +80,16 @@ Net: design is FP-safe. Spec §6/§7/§9 corrected to match validated behavior.
   splice (Read/Edit tools blocked by the prescan on that file).
 - Verify: `wallet-key-regex` 9/9 pass; scan-commit 8/8, bip39-scan 9/9,
   lite-fresh 12/12, full-fresh 15/15 (no regression).
+
+## 2026-06-05 Task 2 done (BIP-39 corpus lock + ReDoS guard)
+
+- Added 7 cases to test_bip39_scan: 24-word block, 4-per-line whitespace grid
+  block, two-sub-12-runs pass, long-token-breaks-run pass, underscore-join pass,
+  numbered-list documented-PASS (L1 limitation pinned), 10k-word ReDoS guard.
+- Deviation/fix: first perf generator `yes "$w" | head -1300` aborted the script
+  under `set -o pipefail` (yes gets SIGPIPE, exit 141). Replaced with an awk
+  BEGIN loop emitting 1300 copies, no broken pipe. Lesson: any `cmd | head` in a
+  pipefail script needs SIGPIPE-safe construction.
+- L1 is asserted as PASS on purpose so the v1 limitation is a tracked test, not a
+  silent gap; a Phase-2 fix flips it to BLOCK deliberately.
+- Verify: bip39-scan 16/16; FULL suite green (12 scenarios, 121 asserts, 0 fail).

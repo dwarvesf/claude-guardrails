@@ -245,6 +245,10 @@ All §6/§7 cases above were validated empirically against the real
 
 Atomic, each <5 files. Task 3 depends on Task 1 (rules must be final before port).
 
+- [x] Task 1 -- DONE (commit bf89cca, verified: wallet-key-regex 9/9)
+- [x] Task 2 -- DONE (verified: bip39-scan 16/16, full suite green)
+- [ ] Task 3 -- HELD for operator confirmation (personal-layer/chezmoi port)
+
 ### Task 1: add WIF + xprv regex rules + regex tests
 - Files: `patterns/secrets.json`, `tests/ci-test.sh`.
 - Add the two rules from §3a to `patterns/secrets.json`.
