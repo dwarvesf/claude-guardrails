@@ -93,3 +93,20 @@ Net: design is FP-safe. Spec §6/§7/§9 corrected to match validated behavior.
 - L1 is asserted as PASS on purpose so the v1 limitation is a tracked test, not a
   silent gap; a Phase-2 fix flips it to BLOCK deliberately.
 - Verify: bip39-scan 16/16; FULL suite green (12 scenarios, 121 asserts, 0 fail).
+
+## 2026-06-05 Task 4 done (B9 secret-read-to-disk warning, personal layer)
+
+- New leak class raised mid-stream: parallel sessions dumping `op item get ... >
+  /tmp/*.json`. Root cause: secret-guard's threat model is transcript-safety, so
+  is_safe_secret_call() blesses ANY redirect-to-file (line ~411) and even the B1
+  banner recommended `> /tmp/secret`. On-disk persistence was unguarded.
+- Built as a non-blocking B9 in the chezmoi source (executable_secret-guard.sh),
+  NOT a new hook, to avoid a settings.json change (deny-listed) and reuse the
+  already-wired hook. Placed after B8 so all blocks run first.
+- FP-safety: strips $()/backtick captures first, requires a real-path stdout
+  redirect (not /dev/null, not 2>), warn-only. kubectl requires "get secret"
+  (not "get pods"). Verified 7 WARN / 6 ALLOW / 2 BLOCK.
+- Deploy: edited chezmoi source -> chezmoi apply single file -> cmp parity ->
+  live smoke -> atomic commit in dotfiles (S-64 watcher). dotfiles 58abcd9.
+- This is personal-layer only; product (claude-guardrails) has no op-verb Bash
+  guard. Upstream candidate. Recorded as SPEC §11a amendment.

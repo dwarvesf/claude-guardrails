@@ -248,6 +248,32 @@ Atomic, each <5 files. Task 3 depends on Task 1 (rules must be final before port
 - [x] Task 1 -- DONE (commit bf89cca, verified: wallet-key-regex 9/9)
 - [x] Task 2 -- DONE (verified: bip39-scan 16/16, full suite green)
 - [ ] Task 3 -- HELD for operator confirmation (personal-layer/chezmoi port)
+- [x] Task 4 -- DONE (personal layer): B9 secret-read-to-disk warning
+
+## 11a. Amendment: secret-read captured to disk (B9, personal layer)
+
+Surfaced before the port: the personal `secret-guard.sh` treats any
+redirect-to-file as "safe" (transcript threat model), so `op item get pt >
+/tmp/pt.json` and peers were ALLOWED, leaving live credentials on disk (the
+reported /tmp leak across parallel sessions). This is a distinct leak class
+from wallet-content detection, hence a separate control.
+
+- Decision: WARN, never block (preserves legit file-render flows; would not
+  wedge the 5 running sessions). Scope = op + kubectl get secret + gcloud
+  secrets versions access + aws secretsmanager get-secret-value.
+- Implementation: non-blocking B9 check at the END of the Bash case (after all
+  block() checks pass). Strips capture forms first, requires a stdout redirect
+  to a real path (not /dev/null, not `2>`), emits a systemMessage +
+  additionalContext with the capture-and-wipe recipe (mktemp + trap shred) and
+  the `rm`-alias cleanup caveat. Softened the B1 banner's `> /tmp/secret`
+  suggestion to mktemp.
+- Lives in the personal layer only (the product has no op-verb Bash guard);
+  candidate to upstream into claude-guardrails as a PreToolUse hook later.
+- Verified: 7 WARN cases, 6 ALLOW (ephemeral/non-secret), 2 BLOCK (existing
+  behavior unchanged) all green; deployed via chezmoi, parity confirmed, live
+  smoke test passed. Commit 58abcd9 in dotfiles.
+- Caveat: hooks load at session start; the 5 already-running sessions need a
+  /clear or restart to pick up B9.
 
 ### Task 1: add WIF + xprv regex rules + regex tests
 - Files: `patterns/secrets.json`, `tests/ci-test.sh`.
