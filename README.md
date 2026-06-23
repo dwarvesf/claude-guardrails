@@ -110,6 +110,35 @@ Defense-in-depth layers that catch what the sandbox doesn't need to. They do not
 
 No single layer is sufficient. Stack them.
 
+### Optional native prompt-injection scanner
+
+The bundled prompt injection scanner is intentionally small and pattern-based. If you want a local native scanner with structured reasons, you can also run [Armorer Guard](https://github.com/ArmorerLabs/Armorer-Guard) from a Claude Code hook:
+
+```bash
+cargo install armorer-guard --locked
+```
+
+Example `PostToolUse` wrapper:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+payload="$(cat)"
+text="$(printf '%s' "$payload" | jq -r '.tool_response.content // .tool_response // empty')"
+
+if [ -n "$text" ]; then
+  verdict="$(printf '%s' "$text" | armorer-guard inspect-json --profile agent-runtime)"
+  suspicious="$(printf '%s' "$verdict" | jq -r '.suspicious // false')"
+  if [ "$suspicious" = "true" ]; then
+    reasons="$(printf '%s' "$verdict" | jq -r '.reasons | join(", ")')"
+    echo "Armorer Guard flagged this tool output: $reasons"
+  fi
+fi
+```
+
+Treat this as another catch-net, not a replacement for sandboxing. Keep the scanner local, review false positives, and fail closed only where your workflow can tolerate it.
+
 See [`full/SETUP.md`](full/SETUP.md) for detailed explanations of each layer and their limitations.
 
 ## Known Tradeoffs
