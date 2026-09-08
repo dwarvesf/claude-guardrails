@@ -2,6 +2,23 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.1] - 2026-09-08
+
+Every `Read`/`Edit` deny rule shipped so far was inert. Claude Code expects `Edit(~/path)`; the space form `Edit ~/path` parses as a bare tool name, so the harness prints `Permission deny rule "Edit ~/.claude/settings.json" matches no known tool` at session start and the rule blocks nothing. That is 17 of 21 rules in `lite` and 36 of 40 in `full`. The `Bash(...)` rules were always correct and are unaffected.
+
+### Fixed
+
+- **`lite/settings.json`, `full/settings.json`** - every deny rule now uses the parenthesised form. No rule was added or removed; the counts are unchanged.
+- **`install.sh`** - the merge drops an existing deny rule when its parenthesised twin is among the rules being installed, so an upgrade rewrites the dead strings instead of stacking a second copy beside them. A rule with no twin in the variant list is the user's own and survives verbatim, in whichever form they wrote it. This also keeps `uninstall.sh` exact-string subtraction correct after an upgrade.
+
+### Added
+
+- **New `legacy-deny-migration` CI scenario** (7 assertions) - seeds a pre-0.4.1 settings file with three space-form shipped rules plus one custom rule, installs `lite`, and asserts the shipped rules were rewritten, no duplicates remain, the custom rule is untouched, and uninstall still subtracts cleanly. CI: 12 scenarios / 121 assertions -> 13 scenarios / 128 assertions.
+
+### Upgrade note
+
+Re-run `bash install.sh <variant>` (or `npx claude-guardrails install`) to rewrite the inert rules. Until you do, the `Read`/`Edit` denies from any earlier release are not enforcing anything.
+
 ## [0.4.0] - 2026-06-05
 
 Adds detection for two non-hex wallet private-key formats and hardens the BIP39 corpus. Until now the only crypto-key coverage was the 64-hex rule (which catches EVM keys incidentally) and the wordlist-based mnemonic scanner. Base58-encoded keys slipped through entirely. Both new rules lean on structured prefixes and fixed lengths, so they stay false-positive safe: `xpub` extended public keys, IPFS CIDs, P2PKH addresses, and non-`5/K/L` Base58 strings all pass clean.
