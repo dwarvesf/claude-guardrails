@@ -288,6 +288,47 @@ test_full_idempotent() {
   finish
 }
 
+test_legacy_deny_migration() {
+  echo "=== legacy-deny-migration: Space-form deny rules rewritten on upgrade ==="
+  clean_claude_dir
+  mkdir -p "$CLAUDE_DIR"
+
+  # Seed the shape a pre-v0.4.1 install left behind: three shipped rules in
+  # the dead space form, plus one custom rule the user wrote themselves.
+  cat > "$SETTINGS" <<'EOF'
+{
+  "permissions": {
+    "deny": [
+      "Read ~/.ssh/**",
+      "Read **/.env",
+      "Edit ~/.claude/settings.json",
+      "Read ~/my-custom-secret.txt"
+    ]
+  }
+}
+EOF
+
+  bash "$REPO_DIR/install.sh" lite
+
+  assert_eq "$(get_deny_count)" "22" "deny count after upgrade (21 + 1 custom, no legacy twins)"
+  assert_eq "$(jq '[.permissions.deny[] | select(test("\\.ssh"))] | length' "$SETTINGS")" \
+    "1" "only one ~/.ssh rule survives the upgrade"
+  assert_eq "$(jq -r '.permissions.deny[] | select(test("ssh"))' "$SETTINGS")" \
+    "Read(~/.ssh/**)" "legacy ~/.ssh rule rewritten to the parenthesised form"
+  assert_eq "$(jq '[.permissions.deny[] | select(test("^[A-Za-z]+ ") and (test("my-custom") | not))] | length' "$SETTINGS")" \
+    "0" "no shipped rule is left in the space form"
+  assert_eq "$(jq '[.permissions.deny[] | select(. == "Read ~/my-custom-secret.txt")] | length' "$SETTINGS")" \
+    "1" "custom rule preserved verbatim, not rewritten"
+
+  # Uninstall must still subtract cleanly: only the custom rule remains.
+  bash "$REPO_DIR/uninstall.sh" lite
+
+  assert_eq "$(jq '.permissions.deny // [] | length' "$SETTINGS")" "1" "deny count after uninstall (custom preserved)"
+  assert_eq "$(jq -r '.permissions.deny[0]' "$SETTINGS")" "Read ~/my-custom-secret.txt" "custom deny rule preserved"
+
+  finish
+}
+
 test_merge_existing() {
   echo "=== merge-existing: Custom config preserved through install/uninstall ==="
   clean_claude_dir
@@ -767,6 +808,7 @@ case "$SCENARIO" in
   lite-roundtrip)    test_lite_roundtrip ;;
   full-roundtrip)    test_full_roundtrip ;;
   merge-existing)    test_merge_existing ;;
+  legacy-deny-migration) test_legacy_deny_migration ;;
   scan-commit)       test_scan_commit ;;
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;

@@ -50,12 +50,26 @@ if [[ -f "$SETTINGS" ]]; then
   cp "$SETTINGS" "$SETTINGS.backup"
   echo "  Backed up existing settings → settings.json.backup"
 
-  # Merge: deduplicate deny rules and PreToolUse hooks
+  # Merge: deduplicate deny rules and PreToolUse hooks.
+  #
+  # Releases through v0.4.0 wrote deny rules as "Edit ~/path" where Claude
+  # Code expects "Edit(~/path)". The space form parses as a bare tool name,
+  # so the harness warns "matches no known tool" and the rule protects
+  # nothing. Upgrading users carry those dead strings, so drop an existing
+  # rule when its parenthesised twin is one of the rules being installed.
+  # A rule with no twin in the variant list is the user's own and survives
+  # untouched, in whichever form they wrote it.
   jq -s '
+    def paren:
+      if test("^[A-Za-z]+\\(") then .
+      else sub("^(?<v>[A-Za-z]+) +(?<p>.+)$"; "\(.v)(\(.p))") end;
     .[0] as $existing | .[1] as $new |
     ($existing * $new) |
+    ($new.permissions.deny // []) as $variant_deny |
     .permissions.deny = (
-      [($existing.permissions.deny // [])[], ($new.permissions.deny // [])[]]
+      [($existing.permissions.deny // [])[]
+        | select((paren | IN($variant_deny[])) | not)]
+      + $variant_deny
       | unique
     ) |
     .hooks.PreToolUse = (
