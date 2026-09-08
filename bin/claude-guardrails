@@ -29,8 +29,8 @@ Usage:
   claude-guardrails --version             Show version
 
 Variants:
-  lite   3 hooks, 15 deny rules — for trusted projects (default)
-  full   5 hooks + prompt injection scanner — for untrusted codebases
+  lite   4 hooks, 21 deny rules, for trusted projects (default)
+  full   6 hooks, 40 deny rules + prompt injection scanner, for untrusted codebases
 
 Examples:
   npx claude-guardrails install
