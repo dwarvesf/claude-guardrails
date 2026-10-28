@@ -555,6 +555,13 @@ test_scan_commit_cargo_lock() {
   run_case "Cargo.lock" "checksum = \"$HEX\" # x" "2" "Cargo.lock checksum with trailing text still blocked"
   run_case "Cargo.lock" "  checksum = \"$HEX\"" "2" "Cargo.lock checksum with leading space still blocked"
 
+  # Still blocked: the exemption covers lowercase hex only. Cargo writes
+  # lowercase digests, so uppercase or mixed case is not a lockfile checksum.
+  HEX_UPPER="$(printf '%s' "$HEX" | tr 'a-f' 'A-F')"
+  HEX_MIXED="AB${HEX:2}"
+  run_case "Cargo.lock" "checksum = \"$HEX_UPPER\"" "2" "Cargo.lock uppercase-hex checksum still blocked"
+  run_case "Cargo.lock" "checksum = \"$HEX_MIXED\"" "2" "Cargo.lock mixed-case-hex checksum still blocked"
+
   # Spoofing: an added content line that reads like a Cargo.lock header must not
   # flip the exemption on for the file that carries it.
   run_case "config.toml" "$(printf '++ b/Cargo.lock\n%s' "$CK")" "2" "spoofed +++ header line does not exempt"

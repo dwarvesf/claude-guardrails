@@ -10,7 +10,7 @@ All notable changes to claude-guardrails are documented here. Format loosely fol
 
 ### Added
 
-- **New `scan-commit-cargo-lock` CI scenario** (13 assertions) - exempt case at the root and nested; blocked cases for `config.toml`, `NotCargo.lock`, `Cargo.lock.bak`, a `Cargo.lock/` directory, a `key = "<hex>"` shape, trailing text, leading space, a spoofed header line, and a different secret inside `Cargo.lock`; plus a check that `lite` and `full` ship the same hook. Fixtures are built at runtime. CI: 13 scenarios / 128 assertions -> 14 scenarios / 141 assertions.
+- **New `scan-commit-cargo-lock` CI scenario** (15 assertions) - exempt case at the root and nested; blocked cases for `config.toml`, `NotCargo.lock`, `Cargo.lock.bak`, a `Cargo.lock/` directory, a `key = "<hex>"` shape, trailing text, leading space, uppercase and mixed-case hex (the exemption is lowercase only), a spoofed header line, and a different secret inside `Cargo.lock`; plus a check that `lite` and `full` ship the same hook. Fixtures are built at runtime. CI: 13 scenarios / 128 assertions -> 14 scenarios / 143 assertions.
 
 ## [0.4.1] - 2026-09-08
 
