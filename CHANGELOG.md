@@ -2,6 +2,16 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`lite/scan-commit.sh`, `full/scan-commit.sh`** - the commit scanner no longer blocks Rust lockfiles. Every `checksum = "<64 hex>"` line in a `Cargo.lock` is a SHA-256 crate digest, and the 64-hex private-key rule blocked each one. The extractor now tracks the current file from each `+++` header and drops a line only when both hold: the file's basename is exactly `Cargo.lock`, and the line matches `^checksum = "[0-9a-f]{64}"$`. Every other line in `Cargo.lock`, and every line in every other file (`NotCargo.lock`, `config.toml`, a `key = "<hex>"` line inside `Cargo.lock`), is scanned as before. An added content line that imitates a `+++` header cannot switch the exemption on, because headers count only between a `diff --git` line and its first `@@`. Fail-open behavior is unchanged. The prompt scanner (`scan-secrets.sh`) is untouched.
+
+### Added
+
+- **New `scan-commit-cargo-lock` CI scenario** (15 assertions) - exempt case at the root and nested; blocked cases for `config.toml`, `NotCargo.lock`, `Cargo.lock.bak`, a `Cargo.lock/` directory, a `key = "<hex>"` shape, trailing text, leading space, uppercase and mixed-case hex (the exemption is lowercase only), a spoofed header line, and a different secret inside `Cargo.lock`; plus a check that `lite` and `full` ship the same hook. Fixtures are built at runtime. CI: 13 scenarios / 128 assertions -> 14 scenarios / 143 assertions.
+
 ## [0.4.1] - 2026-09-08
 
 Every `Read`/`Edit` deny rule shipped so far was inert. Claude Code expects `Edit(~/path)`; the space form `Edit ~/path` parses as a bare tool name, so the harness prints `Permission deny rule "Edit ~/.claude/settings.json" matches no known tool` at session start and the rule blocks nothing. That is 17 of 21 rules in `lite` and 36 of 40 in `full`. The `Bash(...)` rules were always correct and are unaffected.

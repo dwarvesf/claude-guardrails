@@ -50,7 +50,35 @@ fi
 
 # Extract only the added-line content (lines starting with "+"), skipping
 # the "+++" file-header lines that otherwise leak path strings into the scan.
-ADDED="$(echo "$DIFF" | awk '/^\+\+\+ / { next } /^\+/ { sub(/^\+/, ""); print }')"
+#
+# One narrow exemption: Cargo.lock lists a SHA-256 `checksum = "<64 hex>"` per
+# crate, which the 64-hex rule would otherwise block on every lockfile change.
+# A line is dropped only when BOTH hold: the file's basename is exactly
+# `Cargo.lock` (taken from the `+++` header, honoured only between a
+# `diff --git` line and its first `@@` so an added content line can never spoof
+# it), AND the line matches exactly `^checksum = "[0-9a-f]{64}"$`. Everything
+# else, including every other Cargo.lock line, is scanned as before. The 64-char
+# check uses length() (12-char prefix + 64 + closing quote = 77) because mawk
+# builds without regex intervals would not honour `{64}`.
+ADDED="$(echo "$DIFF" | awk '
+  /^diff --git / { hdr = 1; cargo = 0; next }
+  /^@@/          { hdr = 0 }
+  /^\+\+\+ /     {
+    if (hdr) {
+      path = substr($0, 5)
+      sub(/\t.*$/, "", path)
+      gsub(/"/, "", path)
+      n = split(path, parts, "/")
+      cargo = (parts[n] == "Cargo.lock")
+    }
+    next
+  }
+  /^\+/ {
+    line = substr($0, 2)
+    if (cargo && length(line) == 77 && line ~ /^checksum = "[0-9a-f]+"$/) next
+    print line
+  }
+')"
 
 if [[ -z "$ADDED" ]]; then
   exit 0

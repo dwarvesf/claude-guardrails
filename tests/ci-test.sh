@@ -495,6 +495,94 @@ EOF
   finish
 }
 
+test_scan_commit_cargo_lock() {
+  echo "=== scan-commit-cargo-lock: Cargo.lock checksum exemption is narrow ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh"
+  assert_file_executable "$HOOK" "scan-commit hook is executable"
+
+  # The full variant ships the same hook; a drift would silently split the rule.
+  if cmp -s "$REPO_DIR/lite/scan-commit.sh" "$REPO_DIR/full/scan-commit.sh"; then
+    echo "  PASS: lite and full scan-commit.sh are identical"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: lite and full scan-commit.sh differ"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Fake 64-hex digest built at runtime so no literal lands in this source file.
+  HEX="$(printf 'ab%.0s' $(seq 32))"
+  [[ "${#HEX}" -eq 64 ]] || { echo "FATAL: fixture is not 64 chars"; exit 1; }
+
+  REPO="$HOME/cargo-lock-fixture"
+  INPUT="$(jq -n --arg cwd "$REPO" '{tool_input:{command:"git commit -m test"}, cwd:$cwd}')"
+
+  # Fresh repo per case; stage "$2" holding the line "$3" under path "$1", run
+  # the hook, assert its exit code "$4".
+  run_case() {
+    local path="$1" content="$2" expected="$3" label="$4" code
+    rm -rf "$REPO"
+    mkdir -p "$REPO"
+    ( cd "$REPO" && git init -q && git config user.email test@example.com \
+        && git config user.name "Scan Commit Test" \
+        && mkdir -p "$(dirname "$path")" \
+        && printf '%s\n' "$content" > "$path" \
+        && git add "$path" )
+    set +e
+    echo "$INPUT" | "$HOOK" >/dev/null 2>&1
+    code=$?
+    set -e
+    assert_eq "$code" "$expected" "$label"
+  }
+
+  CK="checksum = \"$HEX\""
+
+  # Exempt: the exact Cargo.lock checksum shape, at the root and nested.
+  run_case "Cargo.lock" "$CK" "0" "Cargo.lock checksum line allowed"
+  run_case "crates/app/Cargo.lock" "$CK" "0" "nested Cargo.lock checksum line allowed"
+
+  # Still blocked: same digest, wrong file.
+  run_case "config.toml" "$CK" "2" "checksum line in config.toml still blocked"
+  run_case "NotCargo.lock" "$CK" "2" "NotCargo.lock checksum line still blocked"
+  run_case "Cargo.lock.bak" "$CK" "2" "Cargo.lock.bak checksum line still blocked"
+  run_case "Cargo.lock/config.toml" "$CK" "2" "file under a Cargo.lock directory still blocked"
+
+  # Still blocked: right file, different line shape.
+  run_case "Cargo.lock" "key = \"$HEX\"" "2" "Cargo.lock line with key = shape still blocked"
+  run_case "Cargo.lock" "checksum = \"$HEX\" # x" "2" "Cargo.lock checksum with trailing text still blocked"
+  run_case "Cargo.lock" "  checksum = \"$HEX\"" "2" "Cargo.lock checksum with leading space still blocked"
+
+  # Still blocked: the exemption covers lowercase hex only. Cargo writes
+  # lowercase digests, so uppercase or mixed case is not a lockfile checksum.
+  HEX_UPPER="$(printf '%s' "$HEX" | tr 'a-f' 'A-F')"
+  HEX_MIXED="AB${HEX:2}"
+  run_case "Cargo.lock" "checksum = \"$HEX_UPPER\"" "2" "Cargo.lock uppercase-hex checksum still blocked"
+  run_case "Cargo.lock" "checksum = \"$HEX_MIXED\"" "2" "Cargo.lock mixed-case-hex checksum still blocked"
+
+  # Spoofing: an added content line that reads like a Cargo.lock header must not
+  # flip the exemption on for the file that carries it.
+  run_case "config.toml" "$(printf '++ b/Cargo.lock\n%s' "$CK")" "2" "spoofed +++ header line does not exempt"
+
+  # A mixed commit: Cargo.lock checksum passes, a real-shaped secret in the
+  # same Cargo.lock still blocks.
+  rm -rf "$REPO"
+  mkdir -p "$REPO"
+  ( cd "$REPO" && git init -q && git config user.email test@example.com \
+      && git config user.name "Scan Commit Test" \
+      && printf '%s\n%s\n' "$CK" "AWS_ACCESS_KEY_ID=AKIA$(printf 'A%.0s' $(seq 16))" > Cargo.lock \
+      && git add Cargo.lock )
+  set +e
+  echo "$INPUT" | "$HOOK" >/dev/null 2>&1
+  EXIT=$?
+  set -e
+  assert_eq "$EXIT" "2" "other secret in Cargo.lock still blocked"
+
+  finish
+}
+
 test_schema_remediation() {
   echo "=== schema-remediation: Installer flags and fixes pre-v0.3.5 bad \$schema ==="
 
@@ -810,13 +898,14 @@ case "$SCENARIO" in
   merge-existing)    test_merge_existing ;;
   legacy-deny-migration) test_legacy_deny_migration ;;
   scan-commit)       test_scan_commit ;;
+  scan-commit-cargo-lock) test_scan_commit_cargo_lock ;;
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
   wallet-key-regex)  test_wallet_key_regex ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, push-hook, schema-remediation, bip39-scan, wallet-key-regex"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, push-hook, schema-remediation, bip39-scan, wallet-key-regex"
     exit 1
     ;;
 esac
