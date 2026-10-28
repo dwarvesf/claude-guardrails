@@ -2,7 +2,7 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.4.2] - 2026-10-28
 
 ### Fixed
 
