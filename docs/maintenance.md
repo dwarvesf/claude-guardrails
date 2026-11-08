@@ -42,7 +42,7 @@ Used by both `scan-secrets.sh` (prompt) and `scan-commit.sh` (staged diff). Any 
 - [ ] Review credential regex list against current issuer formats (AWS, GitHub, Anthropic, OpenAI, Google, Slack, Stripe, 1Password)
 - [ ] Check for new token prefixes or length changes (e.g. GitHub's token format has evolved; Anthropic and OpenAI both changed theirs historically)
 - [ ] Add patterns for new issuers your team depends on (Linear, Vercel, Supabase, etc.)
-- [ ] Review false positive reports — 64-hex rule intentionally catches SHA-256 digests; confirm this tradeoff still holds
+- [ ] Review false positive reports — the 64-hex rule catches SHA-256 digests; `scan-commit.sh` blocks them, `scan-secrets.sh` allows them on a hash-context line with no key word (`scan-secrets-hash-context` scenario); confirm both tradeoffs still hold
 - [ ] Test with known-good and known-bad paste samples via `scan-secrets.sh`
 - [ ] Test commit-time behaviour via the `scan-commit` CI scenario (staged AWS key blocks; clean diff allows; `git commit-tree` plumbing not intercepted)
 

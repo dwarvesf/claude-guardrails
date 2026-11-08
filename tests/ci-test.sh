@@ -883,6 +883,93 @@ test_wallet_key_regex() {
   finish
 }
 
+test_scan_secrets_hash_context() {
+  echo "=== scan-secrets-hash-context: 64-hex digests pass in hash context, keys still block ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-secrets/scan-secrets.sh"
+  PATTERNS="$CLAUDE_DIR/hooks/patterns/secrets.json"
+  assert_file_executable "$HOOK" "scan-secrets hook installed"
+
+  # The full variant ships the same hook apart from a comment; compare code lines.
+  if cmp -s <(grep -v '^#' "$REPO_DIR/lite/scan-secrets.sh") <(grep -v '^#' "$REPO_DIR/full/scan-secrets.sh"); then
+    echo "  PASS: lite and full scan-secrets.sh match outside comments"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: lite and full scan-secrets.sh differ outside comments"
+    FAIL=$((FAIL + 1))
+  fi
+
+  run_scan() {
+    local input rc
+    input="$(jq -n --arg p "$1" '{prompt:$p}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    rc=$?
+    set -e
+    echo "$rc"
+  }
+
+  # Old behaviour: the shared rule alone matches the prompt, so the pre-change
+  # hook blocked it. This is the negative control for the allowed cases.
+  old_rule_blocks() {
+    jq -n --arg p "$1" --slurpfile pats "$PATTERNS" \
+      '$pats[0] | map(select(.n | startswith("Hex private key"))) | .[0].r as $r | $p | test($r)' | grep -qx true
+  }
+
+  # Fake 64-hex fixture built at runtime so no literal digest lands in this file.
+  HEX="$(printf 'ab%.0s' $(seq 32))"
+  HEX2="$(printf 'cd%.0s' $(seq 32))"
+  [[ "${#HEX}" -eq 64 ]] || { echo "FATAL: fixture is not 64 chars"; exit 1; }
+  NL=$'\n'
+
+  # Allowed: hash context on the line, no key material.
+  allow_case() {
+    assert_eq "$(run_scan "$1")" "0" "allowed: $2"
+    if old_rule_blocks "$1"; then
+      echo "  PASS: control: shared rule alone would block ($2)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: control: shared rule alone does not match ($2)"
+      FAIL=$((FAIL + 1))
+    fi
+  }
+  allow_case "$HEX  dist/app.tar.gz" "shasum output line"
+  allow_case "$HEX *dist/app.bin" "shasum binary-mode line"
+  allow_case "SHA256 (dist/app.tar.gz) = $HEX" "BSD shasum -a 256 form"
+  allow_case "sha256: $HEX" "sha256 label"
+  allow_case "commit $HEX" "commit label"
+  allow_case "https://etherscan.io/tx/0x$HEX" "explorer tx URL"
+  allow_case "tx 0x$HEX confirmed" "0x tx hash"
+  allow_case "MANIFEST $HEX" "manifest line"
+  allow_case "$HEX  a.txt${NL}$HEX2  b.txt" "two shasum lines"
+  allow_case "\$ shasum -a 256 f${NL}$HEX  f${NL}done" "terminal output with context line"
+
+  # Blocked: standalone, key material on the line, or a bare second digest.
+  assert_eq "$(run_scan "$HEX")" "2" "blocked: bare hex alone"
+  assert_eq "$(run_scan "key $HEX")" "2" "blocked: bare hex with a non-hash word"
+  assert_eq "$(run_scan "private key: $HEX")" "2" "blocked: private key label"
+  assert_eq "$(run_scan "PRIVATE_KEY=0x$HEX")" "2" "blocked: PRIVATE_KEY= with 0x"
+  assert_eq "$(run_scan "seed $HEX")" "2" "blocked: seed label"
+  assert_eq "$(run_scan "mnemonic $HEX")" "2" "blocked: mnemonic label"
+  assert_eq "$(run_scan "wallet key 0x$HEX")" "2" "blocked: wallet key with 0x"
+  assert_eq "$(run_scan "sha256 $HEX private")" "2" "blocked: hash word but key word on the line"
+  assert_eq "$(run_scan "sha256 $HEX seed")" "2" "blocked: key word after the hex"
+  assert_eq "$(run_scan "sha256 $HEX $HEX2")" "2" "blocked: second hex on a line has no context"
+  assert_eq "$(run_scan "sha256 ok${NL}$HEX")" "2" "blocked: context on a different line"
+  assert_eq "$(run_scan "sha256 $HEX${NL}secret $HEX2")" "2" "blocked: key line after a hash line"
+  assert_eq "$(run_scan "hash $(printf 'x%.0s' $(seq 50)) $HEX")" "2" "blocked: hash word too far before the hex"
+  assert_eq "$(run_scan "Sha256 digest of file ${HEX}0")" "0" "allowed: 65 hex is not a 64-hex run"
+
+  # Other rules are untouched by the hash exemption.
+  AWS="AKIA$(printf 'A%.0s' $(seq 16))"
+  assert_eq "$(run_scan "sha256 $HEX ok $AWS")" "2" "blocked: other secret beside a digest"
+
+  finish
+}
+
 # --- Dispatch ---
 
 echo "Scenario: $SCENARIO"
@@ -903,9 +990,10 @@ case "$SCENARIO" in
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
   wallet-key-regex)  test_wallet_key_regex ;;
+  scan-secrets-hash-context) test_scan_secrets_hash_context ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, push-hook, schema-remediation, bip39-scan, wallet-key-regex"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, push-hook, schema-remediation, bip39-scan, wallet-key-regex, scan-secrets-hash-context"
     exit 1
     ;;
 esac
