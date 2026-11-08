@@ -2,6 +2,16 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.3] - 2026-11-09
+
+### Fixed
+
+- **`lite/scan-secrets.sh`, `full/scan-secrets.sh`** - the prompt scanner no longer blocks SHA-256 digests pasted from terminal output. The 64-hex rule now judges each prompt line on its own. A 64-hex run (optionally `0x`-prefixed) is allowed when its line has hash context and names no key material. Hash context is any of: shasum output form (`<hex>  <path>` or `<hex> *<path>`), BSD form (`SHA256 (<path>) = <hex>`), a word such as `sha256`, `digest`, `checksum`, `hash`, `commit`, `oid`, `tx`, `txid`, `manifest` within 40 characters before the hex, or a URL path segment like `/tx/<hex>`. Key material is `priv`, `secret`, `seed`, `mnemonic`, `wallet key`, or `key=` / `key:` anywhere on the line. A bare run, a run on a key line, a second run on a line, and a run whose context sits on another line all still block. The shared `patterns/secrets.json` is unchanged, so `scan-commit.sh` keeps the plain rule and still blocks staged digests (except `Cargo.lock` checksums, per 0.4.2). The block message no longer says to rephrase a hash.
+
+### Added
+
+- **New `scan-secrets-hash-context` CI scenario** (37 assertions) - 10 allowed shapes, each with a control showing the shared rule alone matches them (the old behaviour); 14 blocked shapes plus a 65-hex non-run and an unrelated secret beside a digest; and a check that `lite` and `full` ship the same hook outside comments. Fixtures are built at runtime. The scenario is in `tests/ci-test.sh` (15 scenarios / 180 assertions); its workflow matrix entry is a separate change, so run it with `bash tests/ci-test.sh scan-secrets-hash-context`.
+
 ## [0.4.2] - 2026-10-28
 
 ### Fixed
