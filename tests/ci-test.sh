@@ -700,6 +700,40 @@ test_scan_commit_target_repo() {
   run_cmd "cd sub && make && cd .. && git commit -m x" "$A" "2" "cd sub && cd .. returns to the cwd repo (blocked)"
   run_cmd "cd sub && git commit -m x" "$A" "2" "cd into a repo subdir scans that repo (blocked)"
 
+  # Work cap: more than 32 cds, commits, options, or candidate directories
+  # block before any per-repo git call, so a crafted command cannot push the
+  # hook past its timeout (a timed-out hook lets the commit through).
+  fresh_repo "$A" clean
+  fresh_repo "$B" clean
+  CDS32=""
+  for i in $(seq 32); do
+    mkdir -p "$BASE/d$i"
+    CDS32="${CDS32}cd $BASE/d$i; "
+  done
+  mkdir -p "$BASE/d33"
+  CDS33="${CDS32}cd $BASE/d33; "
+  run_cmd "${CDS33}git commit -m x" "$A" "2" "33 cds to real directories (blocked at the cap)"
+  set +e
+  MSG="$(jq -n --arg cmd "${CDS33}git commit -m x" --arg cwd "$A" '{tool_input:{command:$cmd}, cwd:$cwd}' \
+    | "$HOOK" 2>&1 >/dev/null)"
+  set -e
+  if [[ "$MSG" == *"too many directories to scan"* && "$MSG" == *"from inside the repo"* ]]; then
+    echo "  PASS: cap message says too many directories and to commit from inside the repo"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cap message missing its reason or its advice"
+    FAIL=$((FAIL + 1))
+  fi
+  run_cmd "${CDS32}git commit -m x" "$A" "0" "32 cds, nothing staged with a secret (allowed, under the cap)"
+  COMMITS33=""
+  for i in $(seq 33); do
+    COMMITS33="${COMMITS33}git commit -m x$i; "
+  done
+  run_cmd "$COMMITS33" "$A" "2" "33 git commit occurrences (blocked at the cap)"
+  run_cmd "cd $BASE/d1; cd $B && git commit -m x" "$A" "0" "2 cds, nothing staged with a secret (allowed, as before)"
+  fresh_repo "$B" dirty
+  run_cmd "cd $BASE/d1; cd $B && git commit -m x" "$A" "2" "2 cds, secret in the second repo (blocked, as before)"
+
   finish
 }
 

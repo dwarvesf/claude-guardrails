@@ -4,7 +4,9 @@ Change: `lite/scan-commit.sh` and `full/scan-commit.sh` (byte-identical) detect 
 
 **Accepted tradeoff:** a secret staged in the session cwd repo now also blocks `cd <other repo> && git commit` (case b). Fail closed beats a bypass, so case (b) now expects BLOCK.
 
-Base: `39440d9`. Earlier single-target versions on this branch: `48225c1`, `6218125`. Host: macOS, bash 5.3 (default `bash`), bash 3.2.57 (`/bin/bash`), BSD awk (default), mawk 1.3.4, gawk 5.4.1. The Ubuntu workflow matrix was not dispatched.
+**Work cap:** a command with more than 32 `cd` commands, `cd` arguments, `git commit` occurrences, `-C`/`-c` options, or candidate directories (payload cwd not counted) is blocked with exit 2 before any per-repo `git` call, because a timed-out hook lets the commit through. **Hook timeout set by the installer: 10 s** (`"timeout": 10` on the scan-commit entry in `lite/settings.json` and `full/settings.json`, which `install.sh` merges into `~/.claude/settings.json`).
+
+Base: `39440d9`. Earlier versions on this branch: `48225c1`, `6218125` (single target), `72d7f5d` (fail closed, no cap). Host: macOS, bash 5.3 (default `bash`), bash 3.2.57 (`/bin/bash`), BSD awk (default), mawk 1.3.4, gawk 5.4.1. The Ubuntu workflow matrix was not dispatched.
 
 ## Green run
 
@@ -22,17 +24,17 @@ Every scenario in `tests/ci-test.sh`, run on the fixed tree with `bash tests/ci-
 | `bash tests/ci-test.sh legacy-deny-migration` | 0 | PASS, `Results: 7 passed, 0 failed` |
 | `bash tests/ci-test.sh scan-commit` | 0 | PASS, `Results: 8 passed, 0 failed` |
 | `bash tests/ci-test.sh scan-commit-cargo-lock` | 0 | PASS, `Results: 15 passed, 0 failed` |
-| `bash tests/ci-test.sh scan-commit-target-repo` | 0 | PASS, `Results: 28 passed, 0 failed` |
+| `bash tests/ci-test.sh scan-commit-target-repo` | 0 | PASS, `Results: 34 passed, 0 failed` |
 | `bash tests/ci-test.sh push-hook` | 0 | PASS, `Results: 13 passed, 0 failed` |
 | `bash tests/ci-test.sh schema-remediation` | 0 | PASS, `Results: 4 passed, 0 failed` |
 | `bash tests/ci-test.sh bip39-scan` | 0 | PASS, `Results: 16 passed, 0 failed` |
 | `bash tests/ci-test.sh wallet-key-regex` | 0 | PASS, `Results: 9 passed, 0 failed` |
 | `bash tests/ci-test.sh scan-secrets-hash-context` | 0 | PASS, `Results: 37 passed, 0 failed` |
-| `scan-commit`, `scan-commit-cargo-lock`, `scan-commit-target-repo` with `bash` = `/bin/bash` 3.2.57 | 0 | PASS, 8 / 15 / 28 passed, 0 failed |
-| same three with `awk` = mawk 1.3.4 and `bash` = 3.2.57 | 0 | PASS, 8 / 15 / 28 passed, 0 failed |
-| same three with `awk` = gawk 5.4.1 and `bash` = 3.2.57 | 0 | PASS, 8 / 15 / 28 passed, 0 failed |
+| `scan-commit`, `scan-commit-cargo-lock`, `scan-commit-target-repo` with `bash` = `/bin/bash` 3.2.57 | 0 | PASS, 8 / 15 / 34 passed, 0 failed |
+| same three with `awk` = mawk 1.3.4 and `bash` = 3.2.57 | 0 | PASS, 8 / 15 / 34 passed, 0 failed |
+| same three with `awk` = gawk 5.4.1 and `bash` = 3.2.57 | 0 | PASS, 8 / 15 / 34 passed, 0 failed |
 
-Total: 16 scenarios, 208 assertions, 0 failed.
+Total: 16 scenarios, 214 assertions, 0 failed.
 
 New scenario output (fixed hook):
 
@@ -65,14 +67,32 @@ New scenario output (fixed hook):
   PASS: cd inside quoted text falls back to cwd (blocked) (2)
   PASS: cd sub && cd .. returns to the cwd repo (blocked) (2)
   PASS: cd into a repo subdir scans that repo (blocked) (2)
-Results: 28 passed, 0 failed
+  PASS: 33 cds to real directories (blocked at the cap) (2)
+  PASS: cap message says too many directories and to commit from inside the repo
+  PASS: 32 cds, nothing staged with a secret (allowed, under the cap) (0)
+  PASS: 33 git commit occurrences (blocked at the cap) (2)
+  PASS: 2 cds, nothing staged with a secret (allowed, as before) (0)
+  PASS: 2 cds, secret in the second repo (blocked, as before) (2)
+Results: 34 passed, 0 failed
 ```
 
-Large-input check under bash 3.2 and 5.3: a 100 KB `git -C "<100 KB path>" commit`, a 200 KB `echo "<100 KB>" && cd /tmp && git -c a=b commit -m "<100 KB>"`, 1,000 `cd /tmp;` before a commit, and 1,000 distinct `cd /tmp/dN;` before a relative `git -C sub commit` each finish in 3 s or less. Every regex loop consumes the text it matched, the sets dedupe as they grow, and path resolution sets a variable instead of forking.
+## Timing against the 10 s hook timeout
+
+Measured on the final hook, wall clock per hook call, payload cwd a repo with a staged secret, every scanned repo with a small staged file. Per-repo cost grows with the size of that repo's staged diff, as it did for the single-repo hook.
+
+| Command shape | bash 3.2.57 | bash 5.3 | Exit |
+| --- | --- | --- | --- |
+| 32 `cd`s to 32 repos with staged secrets, plus the cwd repo (33 repos scanned, the cap's worst case) | 1.34 s | 1.31 s | 2 |
+| 32 `cd`s, 32 `git commit` occurrences, 32 `-c` options, 200 KB of text (33 repos scanned) | 1.93 s | 1.64 s | 2 |
+| 1,000 `cd`s (blocked at the cap before any git call) | 0.20 s | 0.12 s | 2 |
+| 300 `cd`s to 300 clean repos, final hook (blocked at the cap) | 0.11 s | | 2 |
+| 300 `cd`s to 300 clean repos, uncapped hook `72d7f5d` | 8.14 s | | 0 |
+
+Worst case at the cap: under 2 s, about a fifth of the 10 s timeout. Without the cap the cost is about 27 ms per repo, so roughly 370 repos would push the hook past its timeout and let the commit through. The earlier 1,000-`cd` timing check now blocks at the cap in 0.2 s instead of scanning. Large single words are still covered: a 100 KB `git -C "<100 KB path>" commit` and a 200 KB `echo "<100 KB>" && cd /tmp && git -c a=b commit -m "<100 KB>"` finish in about 2 s or less.
 
 ## NEGATIVE CONTROL
 
-Both hooks swapped for an earlier version with `git show <ref>:<path> >| <path>`, the new scenario rerun, then the fixed hooks restored (`cmp` equal to the saved copy) and rerun green. The runner prints an em dash before "expected"; it is shown here as a hyphen.
+Both hooks swapped for an earlier version with `git show <ref>:<path> >| <path>`, the scenario rerun, then the fixed hooks restored (`cmp` equal to the saved copy) and rerun green. The runner prints an em dash before "expected"; it is shown here as a hyphen. Controls 1 and 2 were run on the 28-assertion scenario at `72d7f5d` (before the cap tests existed); control 3 on the final 34-assertion scenario.
 
 Control 1, base version.
 
@@ -136,7 +156,30 @@ Results: 22 passed, 6 failed
 
 Verdict: every bypass test named by the security review fails on the single-target version. The decoy commit and the second `-C` commit steer it to the clean repoC. The `cd -P --` and escaped-space forms make it misread the `cd` and fall back to the clean cwd. All of them exit 0 with a secret staged in repoB. The cwd-repo secret no longer blocks once it switches target.
 
-After both controls: fixed hooks restored, `Results: 28 passed, 0 failed`, exit 0.
+After controls 1 and 2: fixed hooks restored, `Results: 28 passed, 0 failed`, exit 0.
+
+Control 3, cap removed (`72d7f5d`, fail closed with no work cap).
+
+Command:
+
+```bash
+git show 72d7f5d:full/scan-commit.sh >| full/scan-commit.sh
+git show 72d7f5d:lite/scan-commit.sh >| lite/scan-commit.sh
+bash tests/ci-test.sh scan-commit-target-repo
+```
+
+Exit: 1
+
+Output:
+
+```text
+  FAIL: 33 cds to real directories (blocked at the cap) - expected '2', got '0'
+  FAIL: cap message missing its reason or its advice
+  FAIL: 33 git commit occurrences (blocked at the cap) - expected '2', got '0'
+Results: 31 passed, 3 failed
+```
+
+Verdict: without the cap, a command naming 33 directories or 33 commits is scanned in full and allowed, so the same shape scaled up to hundreds of repos runs past the 10 s timeout (8.14 s at 300 repos, above). The 32-`cd` and 2-`cd` cases pass on both versions, so the cap changes nothing below its limit. After restoring the fixed hooks: `Results: 34 passed, 0 failed`, exit 0.
 
 ## Reproduce
 

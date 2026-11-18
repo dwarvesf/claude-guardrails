@@ -71,13 +71,52 @@ resolve_dir() {
 NL=$'\n'
 CANDS="$PWD"
 BASES="$PWD"
-# Add $2 to the set named $1 unless already present.
+# Add $2 to the set named $1 unless already present; return 1 if present.
 add_to() {
   local current="${!1}"
   case "$NL$current$NL" in
-    *"$NL$2$NL"*) ;;
-    *) printf -v "$1" '%s%s%s' "$current" "$NL" "$2" ;;
+    *"$NL$2$NL"*) return 1 ;;
   esac
+  printf -v "$1" '%s%s%s' "$current" "$NL" "$2"
+}
+
+# Work cap. A timed-out hook lets the commit through, so a command that names
+# more than MAX_SCAN of anything is blocked before any per-candidate git call.
+# The cap also keeps the string-set dedupe and the parse loops cheap.
+MAX_SCAN=32
+CD_COUNT=0
+CD_WORDS=0
+COMMIT_COUNT=0
+OPT_WORDS=0
+CAND_COUNT=0
+too_many() {
+  {
+    echo ""
+    echo "==================== COMMIT BLOCKED: TOO MANY DIRECTORIES TO SCAN ===================="
+    echo ""
+    echo "The command names too many directories to scan for staged secrets"
+    echo "within the hook's time limit (more than $MAX_SCAN $1)."
+    echo ""
+    echo "The commit was NOT created."
+    echo ""
+    echo "To resolve: run the commit from inside the repo, as a short command"
+    echo "of its own (cd <repo>, then git commit)."
+    echo ""
+    echo "======================================================================================="
+  } >&2
+  exit 2
+}
+# Increment the counter named $1; block when it passes MAX_SCAN ($2 names it).
+bump() {
+  printf -v "$1" '%s' "$(( ${!1} + 1 ))"
+  if [[ ${!1} -gt $MAX_SCAN ]]; then
+    too_many "$2"
+  fi
+}
+add_cand() {
+  if add_to CANDS "$1"; then
+    bump CAND_COUNT "candidate directories"
+  fi
 }
 
 # Every `cd` in the command, each argument word resolved two ways: against the
@@ -90,16 +129,18 @@ REST="$CMD"
 CD_RE="(^|[^a-zA-Z0-9_./-])cd([[:blank:]].*)"
 ARG_RE="^[[:blank:]]+$WORD"
 while [[ $REST =~ $CD_RE ]]; do
+  bump CD_COUNT "cd commands"
   ARGS="${BASH_REMATCH[2]}"
   LAST_WORD=""
   while [[ $ARGS =~ $ARG_RE ]]; do
+    bump CD_WORDS "cd arguments"
     LAST_WORD="${BASH_REMATCH[1]}"
     ARGS="${ARGS:${#BASH_REMATCH[0]}}"
     resolve_dir "$LAST_WORD" "$PWD"
-    add_to CANDS "$RESOLVED"
+    add_cand "$RESOLVED"
     add_to BASES "$RESOLVED"
     resolve_dir "$LAST_WORD" "$CUR"
-    add_to CANDS "$RESOLVED"
+    add_cand "$RESOLVED"
     add_to BASES "$RESOLVED"
   done
   if [[ -n "$LAST_WORD" ]]; then
@@ -116,21 +157,23 @@ REST="$CMD"
 FIND_RE="$COMMIT_RE(.*)"
 OPT_RE="^[[:space:]]+-([Cc])[[:space:]]+$WORD"
 while [[ $REST =~ $FIND_RE ]]; do
+  bump COMMIT_COUNT "git commit occurrences"
   NEXT="${BASH_REMATCH[$(( ${#BASH_REMATCH[@]} - 1 ))]}"
   OPTS="${BASH_REMATCH[0]#*git}"
   DIRS="$BASES"
   while [[ $OPTS =~ $OPT_RE ]]; do
+    bump OPT_WORDS "git -C / -c options"
     OPTS="${OPTS:${#BASH_REMATCH[0]}}"
     if [[ "${BASH_REMATCH[1]}" == "C" ]]; then
       OPT_WORD="${BASH_REMATCH[2]}"
       NEW_DIRS=""
       while IFS= read -r base; do
         resolve_dir "$OPT_WORD" "$base"
-        add_to CANDS "$RESOLVED"
+        add_cand "$RESOLVED"
         NEW_DIRS="$NEW_DIRS$NL$RESOLVED"
       done <<< "$DIRS"
       resolve_dir "$OPT_WORD" "$PWD"
-      add_to CANDS "$RESOLVED"
+      add_cand "$RESOLVED"
       DIRS="${NEW_DIRS#"$NL"}$NL$RESOLVED"
     fi
   done
