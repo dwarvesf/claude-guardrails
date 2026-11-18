@@ -58,18 +58,20 @@ resolve_dir() {
   esac
 }
 
-# Scan the repo the commit targets, not just the session cwd: apply the last
-# `cd <dir>` before the commit, then the commit's own `-C <dir>` options, the
-# way the shell and git would. An unresolvable target (`cd "$VAR"`, `cd -`, a
-# missing path) falls back to the payload cwd. awk index() and the greedy `.*`
-# keep this linear; bash `${var%%"$x"*}` strips are quadratic on long commands.
+# Scan the repo the commit targets, not just the session cwd: apply each
+# `cd <dir>` before the commit in order, then the commit's own `-C <dir>`
+# options, the way the shell and git would. A target that is not a git repo
+# (`cd "$VAR"`, `cd -`, a missing path, a misread `cd`) falls back to the
+# payload cwd. awk index() and the captured remainder keep this linear; bash
+# `${var%%"$x"*}` / `${var#*"$x"}` strips are quadratic on long commands.
 TARGET="$PWD"
 BEFORE="$(printf '%s' "$CMD" | COMMIT_MATCH="$COMMIT_MATCH" awk 'BEGIN { RS = "\001" }
   { i = index($0, ENVIRON["COMMIT_MATCH"]); if (i > 1) printf "%s", substr($0, 1, i - 1) }')"
-CD_RE="^(.*[^a-zA-Z0-9_./-])?cd[[:space:]]+$WORD"
-if [[ $BEFORE =~ $CD_RE ]]; then
+CD_RE="(^|[^a-zA-Z0-9_./-])cd[[:space:]]+$WORD(.*)"
+while [[ $BEFORE =~ $CD_RE ]]; do
   TARGET="$(resolve_dir "${BASH_REMATCH[2]}" "$TARGET")"
-fi
+  BEFORE="${BASH_REMATCH[4]}"
+done
 OPTS="${COMMIT_MATCH#*git}"
 OPT_RE="^[[:space:]]+-([Cc])[[:space:]]+$WORD"
 while [[ $OPTS =~ $OPT_RE ]]; do
@@ -78,7 +80,7 @@ while [[ $OPTS =~ $OPT_RE ]]; do
   fi
   OPTS="${OPTS:${#BASH_REMATCH[0]}}"
 done
-if [[ -d "$TARGET" ]]; then
+if [[ -d "$TARGET" ]] && git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
   cd "$TARGET" || exit 0
 fi
 

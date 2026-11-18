@@ -659,6 +659,13 @@ test_scan_commit_target_repo() {
   # Unresolvable target falls back to the payload cwd, never to an allow.
   run_cmd "cd /nonexistent-scan-commit-dir && git commit -m x" "$A" "2" "missing cd target falls back to cwd (blocked)"
   run_cmd "cd \"\$WORKDIR\" && git commit -m x" "$A" "2" "variable cd target falls back to cwd (blocked)"
+  run_cmd "cd $BASE && git commit -m x" "$A" "2" "non-repo cd target falls back to cwd (blocked)"
+  run_cmd "echo \"cd /tmp\" && git commit -m x" "$A" "2" "cd inside quoted text falls back to cwd (blocked)"
+
+  # Successive cds compose: a relative cd resolves against the previous one.
+  mkdir -p "$A/sub"
+  run_cmd "cd sub && make && cd .. && git commit -m x" "$A" "2" "cd sub && cd .. returns to the cwd repo (blocked)"
+  run_cmd "cd sub && git commit -m x" "$A" "2" "cd into a repo subdir scans that repo (blocked)"
 
   finish
 }
