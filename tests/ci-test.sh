@@ -583,6 +583,160 @@ test_scan_commit_cargo_lock() {
   finish
 }
 
+test_scan_commit_target_repo() {
+  echo "=== scan-commit-target-repo: hook scans the repo the commit targets ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh"
+  assert_file_executable "$HOOK" "scan-commit hook is executable"
+
+  # Fake 64-hex secret built at runtime so no literal lands in this source file.
+  HEX="$(printf 'ab%.0s' $(seq 32))"
+  [[ "${#HEX}" -eq 64 ]] || { echo "FATAL: fixture is not 64 chars"; exit 1; }
+
+  BASE="$HOME/target-repo"
+  A="$BASE/repoA"
+  B="$BASE/repoB"
+  SP="$BASE/repo b"
+
+  # Fresh repo at "$1" with f.txt staged; "dirty" stages the secret, else clean.
+  fresh_repo() {
+    rm -rf "$1"
+    mkdir -p "$1"
+    ( cd "$1" && git init -q && git config user.email test@example.com \
+        && git config user.name "Scan Commit Test" )
+    if [[ "$2" == "dirty" ]]; then
+      printf 'token = %s\n' "$HEX" > "$1/f.txt"
+    else
+      printf 'clean\n' > "$1/f.txt"
+    fi
+    ( cd "$1" && git add f.txt )
+  }
+
+  # Run the hook on command "$1" with payload cwd "$2"; assert exit "$3".
+  run_cmd() {
+    local cmd="$1" cwd="$2" expected="$3" label="$4" input code
+    input="$(jq -n --arg cmd "$cmd" --arg cwd "$cwd" '{tool_input:{command:$cmd}, cwd:$cwd}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    code=$?
+    set -e
+    assert_eq "$code" "$expected" "$label"
+  }
+
+  # git -C: secret staged only in repoB, payload cwd is a clean repoA.
+  fresh_repo "$A" clean
+  fresh_repo "$B" dirty
+  run_cmd "git -C $B commit -m x" "$A" "2" "git -C <repoB> commit scans repoB (blocked)"
+  run_cmd "git -C ../repoB commit -m x" "$A" "2" "git -C relative path resolves against cwd (blocked)"
+  run_cmd "git -c user.name=\"A B\" -C \"$B\" commit -m x" "$A" "2" "git -c k=\"v w\" -C \"<repoB>\" commit (blocked)"
+  run_cmd "git -C $B commit-tree deadbeef" "$A" "0" "git -C <repoB> commit-tree not intercepted"
+  run_cmd "cd $BASE && git -C repoB commit -m x" "$A" "2" "cd then relative -C composes (blocked)"
+  run_cmd "git -C $B commit -m \"docs: git commit flow\"" "$A" "2" "\"git commit\" inside the message does not hide -C (blocked)"
+
+  # cd && git commit: the same command string, moving only the secret. The
+  # payload cwd is always scanned (fail closed), so a secret staged in the
+  # session repo blocks a commit in another repo too.
+  CD_CMD="cd $B && git add f.txt && git commit -m x"
+  fresh_repo "$A" clean
+  fresh_repo "$B" clean
+  run_cmd "$CD_CMD" "$A" "0" "cd <repoB> && commit, no secret staged anywhere (allowed)"
+  fresh_repo "$A" dirty
+  run_cmd "$CD_CMD" "$A" "2" "cd <repoB> && commit still blocks on the cwd repo's secret (fail closed)"
+  fresh_repo "$A" clean
+  fresh_repo "$B" dirty
+  run_cmd "$CD_CMD" "$A" "2" "cd <repoB> && commit scans repoB (blocked)"
+  run_cmd "cd ../repoB && git commit -m x" "$A" "2" "relative cd resolves against cwd (blocked)"
+  run_cmd "cd ~/target-repo/repoB && git commit -m x" "$A" "2" "cd ~/<path> expands to HOME (blocked)"
+  run_cmd "cd /tmp; cd $B; git commit -m x" "$A" "2" "last cd before the commit wins (blocked)"
+  fresh_repo "$SP" dirty
+  run_cmd "cd \"$SP\" && git commit -m x" "$A" "2" "cd \"<path with space>\" (blocked)"
+  run_cmd "git -C '$SP' commit -m x" "$A" "2" "git -C '<path with space>' (blocked)"
+
+  # Bypass shapes against a single-target parser: the session repo is clean
+  # and the secret sits in the repo the commit really lands in.
+  C="$BASE/repoC"
+  fresh_repo "$SP" clean
+  fresh_repo "$C" clean
+  run_cmd "git -C $C commit -m decoy; cd $B && git commit -m x" "$A" "2" "decoy git -C <clean repo> commit before the real one (blocked)"
+  run_cmd "git -C $C commit --dry-run -m d && git -C $B commit -m x" "$A" "2" "second git -C commit in the command is scanned (blocked)"
+  run_cmd "cd -P -- $B && git commit -m x" "$A" "2" "cd -P -- <repoB>: option words do not hide the target (blocked)"
+  fresh_repo "$B" clean
+  fresh_repo "$SP" dirty
+  run_cmd "cd $BASE/repo\\ b && git commit -m x" "$A" "2" "cd <path\\ with\\ escaped\\ space> (blocked)"
+
+  # The block message names the repo that holds the secret, and only that one.
+  fresh_repo "$SP" clean
+  fresh_repo "$B" dirty
+  set +e
+  MSG="$(jq -n --arg cmd "cd $B && git commit -m x" --arg cwd "$A" '{tool_input:{command:$cmd}, cwd:$cwd}' \
+    | "$HOOK" 2>&1 >/dev/null)"
+  set -e
+  A_REAL="$(cd "$A" && pwd -P)"
+  B_REAL="$(cd "$B" && pwd -P)"
+  if [[ "$MSG" == *"Repository: $B_REAL"* && "$MSG" != *"Repository: $A_REAL"* ]]; then
+    echo "  PASS: block message names repoB, not the clean cwd repo"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: block message does not name repoB alone"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Plain git commit in the payload cwd behaves as before.
+  run_cmd "git commit -m x" "$A" "0" "plain commit, clean cwd repo (allowed)"
+  fresh_repo "$A" dirty
+  run_cmd "git commit -m x" "$A" "2" "plain commit, secret in cwd repo (blocked)"
+
+  # Unresolvable target falls back to the payload cwd, never to an allow.
+  run_cmd "cd /nonexistent-scan-commit-dir && git commit -m x" "$A" "2" "missing cd target falls back to cwd (blocked)"
+  run_cmd "cd \"\$WORKDIR\" && git commit -m x" "$A" "2" "variable cd target falls back to cwd (blocked)"
+  run_cmd "cd $BASE && git commit -m x" "$A" "2" "non-repo cd target falls back to cwd (blocked)"
+  run_cmd "echo \"cd /tmp\" && git commit -m x" "$A" "2" "cd inside quoted text falls back to cwd (blocked)"
+
+  # Successive cds compose: a relative cd resolves against the previous one.
+  mkdir -p "$A/sub"
+  run_cmd "cd sub && make && cd .. && git commit -m x" "$A" "2" "cd sub && cd .. returns to the cwd repo (blocked)"
+  run_cmd "cd sub && git commit -m x" "$A" "2" "cd into a repo subdir scans that repo (blocked)"
+
+  # Work cap: more than 32 cds, commits, options, or candidate directories
+  # block before any per-repo git call, so a crafted command cannot push the
+  # hook past its timeout (a timed-out hook lets the commit through).
+  fresh_repo "$A" clean
+  fresh_repo "$B" clean
+  CDS32=""
+  for i in $(seq 32); do
+    mkdir -p "$BASE/d$i"
+    CDS32="${CDS32}cd $BASE/d$i; "
+  done
+  mkdir -p "$BASE/d33"
+  CDS33="${CDS32}cd $BASE/d33; "
+  run_cmd "${CDS33}git commit -m x" "$A" "2" "33 cds to real directories (blocked at the cap)"
+  set +e
+  MSG="$(jq -n --arg cmd "${CDS33}git commit -m x" --arg cwd "$A" '{tool_input:{command:$cmd}, cwd:$cwd}' \
+    | "$HOOK" 2>&1 >/dev/null)"
+  set -e
+  if [[ "$MSG" == *"too many directories to scan"* && "$MSG" == *"from inside the repo"* ]]; then
+    echo "  PASS: cap message says too many directories and to commit from inside the repo"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: cap message missing its reason or its advice"
+    FAIL=$((FAIL + 1))
+  fi
+  run_cmd "${CDS32}git commit -m x" "$A" "0" "32 cds, nothing staged with a secret (allowed, under the cap)"
+  COMMITS33=""
+  for i in $(seq 33); do
+    COMMITS33="${COMMITS33}git commit -m x$i; "
+  done
+  run_cmd "$COMMITS33" "$A" "2" "33 git commit occurrences (blocked at the cap)"
+  run_cmd "cd $BASE/d1; cd $B && git commit -m x" "$A" "0" "2 cds, nothing staged with a secret (allowed, as before)"
+  fresh_repo "$B" dirty
+  run_cmd "cd $BASE/d1; cd $B && git commit -m x" "$A" "2" "2 cds, secret in the second repo (blocked, as before)"
+
+  finish
+}
+
 test_schema_remediation() {
   echo "=== schema-remediation: Installer flags and fixes pre-v0.3.5 bad \$schema ==="
 
@@ -986,6 +1140,7 @@ case "$SCENARIO" in
   legacy-deny-migration) test_legacy_deny_migration ;;
   scan-commit)       test_scan_commit ;;
   scan-commit-cargo-lock) test_scan_commit_cargo_lock ;;
+  scan-commit-target-repo) test_scan_commit_target_repo ;;
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
@@ -993,7 +1148,7 @@ case "$SCENARIO" in
   scan-secrets-hash-context) test_scan_secrets_hash_context ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, push-hook, schema-remediation, bip39-scan, wallet-key-regex, scan-secrets-hash-context"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, scan-commit-target-repo, push-hook, schema-remediation, bip39-scan, wallet-key-regex, scan-secrets-hash-context"
     exit 1
     ;;
 esac
