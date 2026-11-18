@@ -636,11 +636,15 @@ test_scan_commit_target_repo() {
   run_cmd "cd $BASE && git -C repoB commit -m x" "$A" "2" "cd then relative -C composes (blocked)"
   run_cmd "git -C $B commit -m \"docs: git commit flow\"" "$A" "2" "\"git commit\" inside the message does not hide -C (blocked)"
 
-  # cd && git commit: the same command string, moving only the secret.
+  # cd && git commit: the same command string, moving only the secret. The
+  # payload cwd is always scanned (fail closed), so a secret staged in the
+  # session repo blocks a commit in another repo too.
   CD_CMD="cd $B && git add f.txt && git commit -m x"
-  fresh_repo "$A" dirty
+  fresh_repo "$A" clean
   fresh_repo "$B" clean
-  run_cmd "$CD_CMD" "$A" "0" "cd <repoB> && commit ignores repoA's staged secret (allowed)"
+  run_cmd "$CD_CMD" "$A" "0" "cd <repoB> && commit, no secret staged anywhere (allowed)"
+  fresh_repo "$A" dirty
+  run_cmd "$CD_CMD" "$A" "2" "cd <repoB> && commit still blocks on the cwd repo's secret (fail closed)"
   fresh_repo "$A" clean
   fresh_repo "$B" dirty
   run_cmd "$CD_CMD" "$A" "2" "cd <repoB> && commit scans repoB (blocked)"
@@ -650,6 +654,35 @@ test_scan_commit_target_repo() {
   fresh_repo "$SP" dirty
   run_cmd "cd \"$SP\" && git commit -m x" "$A" "2" "cd \"<path with space>\" (blocked)"
   run_cmd "git -C '$SP' commit -m x" "$A" "2" "git -C '<path with space>' (blocked)"
+
+  # Bypass shapes against a single-target parser: the session repo is clean
+  # and the secret sits in the repo the commit really lands in.
+  C="$BASE/repoC"
+  fresh_repo "$SP" clean
+  fresh_repo "$C" clean
+  run_cmd "git -C $C commit -m decoy; cd $B && git commit -m x" "$A" "2" "decoy git -C <clean repo> commit before the real one (blocked)"
+  run_cmd "git -C $C commit --dry-run -m d && git -C $B commit -m x" "$A" "2" "second git -C commit in the command is scanned (blocked)"
+  run_cmd "cd -P -- $B && git commit -m x" "$A" "2" "cd -P -- <repoB>: option words do not hide the target (blocked)"
+  fresh_repo "$B" clean
+  fresh_repo "$SP" dirty
+  run_cmd "cd $BASE/repo\\ b && git commit -m x" "$A" "2" "cd <path\\ with\\ escaped\\ space> (blocked)"
+
+  # The block message names the repo that holds the secret, and only that one.
+  fresh_repo "$SP" clean
+  fresh_repo "$B" dirty
+  set +e
+  MSG="$(jq -n --arg cmd "cd $B && git commit -m x" --arg cwd "$A" '{tool_input:{command:$cmd}, cwd:$cwd}' \
+    | "$HOOK" 2>&1 >/dev/null)"
+  set -e
+  A_REAL="$(cd "$A" && pwd -P)"
+  B_REAL="$(cd "$B" && pwd -P)"
+  if [[ "$MSG" == *"Repository: $B_REAL"* && "$MSG" != *"Repository: $A_REAL"* ]]; then
+    echo "  PASS: block message names repoB, not the clean cwd repo"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: block message does not name repoB alone"
+    FAIL=$((FAIL + 1))
+  fi
 
   # Plain git commit in the payload cwd behaves as before.
   run_cmd "git commit -m x" "$A" "0" "plain commit, clean cwd repo (allowed)"
