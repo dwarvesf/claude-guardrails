@@ -22,17 +22,64 @@ fi
 
 CMD="$(echo "$INPUT" | jq -r '.tool_input.command // empty')"
 
+# A shell word: one or more double-quoted, single-quoted, or bare segments
+# (so `-c user.name="A B"` and `"/path with space"` are one word).
+WORD="((\"[^\"]*\"|'[^']*'|[^[:space:]\"';&|)])+)"
+
 # Only act on `git commit` (leave git commit-tree, commit-graph plumbing alone).
 # The word boundary after `commit` prevents matching `git commit-tree`, and the
 # required whitespace before handles chained commands (`... && git commit ...`).
-if ! echo "$CMD" | grep -qE '(^|[^a-zA-Z0-9_-])git[[:space:]]+commit([[:space:]]|$)'; then
+# Global `-C <dir>` / `-c <k=v>` options may sit between `git` and `commit`.
+COMMIT_RE="(^|[^a-zA-Z0-9_-])git([[:space:]]+-[Cc][[:space:]]+$WORD)*[[:space:]]+commit([[:space:]]|\$)"
+if ! [[ $CMD =~ $COMMIT_RE ]]; then
   exit 0
 fi
+COMMIT_MATCH="${BASH_REMATCH[0]}"
 
 # Claude Code passes cwd at the top level of the hook payload.
 CWD="$(echo "$INPUT" | jq -r '.cwd // .tool_input.cwd // empty')"
 if [[ -n "$CWD" && -d "$CWD" ]]; then
   cd "$CWD" || exit 0
+fi
+
+# Resolve a shell word ($1) to a directory path against base dir $2:
+# expand a leading unquoted `~`, drop quote characters, prefix relative paths.
+resolve_dir() {
+  local d="$1"
+  case "$d" in
+    "~") d="$HOME" ;;
+    "~/"*) d="$HOME/${d#\~/}" ;;
+  esac
+  d="${d//\"/}"
+  d="${d//\'/}"
+  case "$d" in
+    /*) printf '%s' "$d" ;;
+    *) printf '%s' "$2/$d" ;;
+  esac
+}
+
+# Scan the repo the commit targets, not just the session cwd: apply the last
+# `cd <dir>` before the commit, then the commit's own `-C <dir>` options, the
+# way the shell and git would. An unresolvable target (`cd "$VAR"`, `cd -`, a
+# missing path) falls back to the payload cwd. awk index() and the greedy `.*`
+# keep this linear; bash `${var%%"$x"*}` strips are quadratic on long commands.
+TARGET="$PWD"
+BEFORE="$(printf '%s' "$CMD" | COMMIT_MATCH="$COMMIT_MATCH" awk 'BEGIN { RS = "\001" }
+  { i = index($0, ENVIRON["COMMIT_MATCH"]); if (i > 1) printf "%s", substr($0, 1, i - 1) }')"
+CD_RE="^(.*[^a-zA-Z0-9_./-])?cd[[:space:]]+$WORD"
+if [[ $BEFORE =~ $CD_RE ]]; then
+  TARGET="$(resolve_dir "${BASH_REMATCH[2]}" "$TARGET")"
+fi
+OPTS="${COMMIT_MATCH#*git}"
+OPT_RE="^[[:space:]]+-([Cc])[[:space:]]+$WORD"
+while [[ $OPTS =~ $OPT_RE ]]; do
+  if [[ "${BASH_REMATCH[1]}" == "C" ]]; then
+    TARGET="$(resolve_dir "${BASH_REMATCH[2]}" "$TARGET")"
+  fi
+  OPTS="${OPTS:${#BASH_REMATCH[0]}}"
+done
+if [[ -d "$TARGET" ]]; then
+  cd "$TARGET" || exit 0
 fi
 
 # If not a git repo, let git itself produce the error.

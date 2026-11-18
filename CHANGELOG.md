@@ -2,6 +2,16 @@
 
 All notable changes to claude-guardrails are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`lite/scan-commit.sh`, `full/scan-commit.sh`** - the commit scanner now scans the repo the commit targets, not always the session cwd. Two failures are closed. `git -C <repoB> commit` did not match the detection regex, so the hook exited 0 and repoB's staged secrets went unscanned; detection now accepts global `-C <dir>` and `-c <k=v>` options between `git` and `commit` (quoted and mixed-quoted words included; `commit-tree` is still left alone). `cd <repoB> && git commit` matched but scanned the session cwd repo, so that repo's unrelated staged files could block repoB's commit while repoB went unscanned; the hook now applies the last `cd <dir>` before the commit, then the commit's own `-C` options, with relative paths resolved against the payload cwd and a leading `~` expanded. A target that does not resolve to a directory (`cd "$VAR"`, `cd -`, a missing path) falls back to the payload cwd, as before; a directory that is not a repo still exits 0 and lets git error. Known limits: only the first `git commit` in a command is scanned, and `pushd`, variable paths, and backslash-escaped spaces are not resolved.
+
+### Added
+
+- **New `scan-commit-target-repo` CI scenario** (18 assertions) - `git -C` with absolute, relative, quoted, and `-c k="v w"` forms; `cd && git commit` with the same command string and repo pair where only the secret moves (repoA dirty: allowed; repoB dirty: blocked); relative, `~`, quoted-with-space, and last-of-several `cd` targets; `cd` composed with a relative `-C`; a `git commit` mention inside the message; a plain commit in the cwd (clean allowed, dirty blocked); and unresolvable `cd` targets falling back to the cwd. Fixtures are built at runtime. Added to the workflow matrix. CI: 16 scenarios / 198 assertions in `tests/ci-test.sh`.
+
 ## [0.4.3] - 2026-11-09
 
 ### Fixed
