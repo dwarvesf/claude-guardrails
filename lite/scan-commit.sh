@@ -129,14 +129,29 @@ add_cand() {
 # directories is not blocked. Scripts the scripts run are not followed.
 # WORD_CAP bounds the per-word work: past it, the command walk stops and the
 # command counts as a commit (cwd scanned), and script cd words block.
+# LINE_CAP bounds one token line (no real path is longer), because bash
+# string work on one huge word is quadratic; a longer line is not parsed and
+# the command counts as a commit. Only MAX_SCAN scripts are parsed; past
+# that, the rest are only checked for a commit, and the cap blocks only when
+# one of them could commit, so `git add` or `shellcheck` over many scripts
+# still runs.
 SCRIPT_MAX_BYTES=262144
 WORD_CAP=1024
+LINE_CAP=4096
 CMD_WORDS=0
 SCRIPT_CD_WORDS=0
 SCRIPT_COUNT=0
 SCRIPT_UNREAD=0
 SCRIPT_COMMIT=0
+PROBES=0
 SCRIPTS=""
+PARSED=""
+PROBED=""
+OVERFLOW=()
+# Print the token lines on stdin, a line longer than LINE_CAP as `L` (a token
+# never is one capital letter), and each repeated git commit line once.
+LIMIT_TOKENS='length($0) > cap { print "L"; next }
+  { t = $0; sub(/^[^cg]/, "", t) } t ~ /^git/ && seen[t]++ { next } { print }'
 # Like WORD, but also stops at a redirection or backquote (`x.sh>log`).
 SWORD="((\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\;&|)<>\`])+)"
 CD_TOK="cd([[:blank:]]+$SWORD)+"
@@ -149,16 +164,48 @@ CMD_TOK="($CD_TOK|$SH_TOK|$SRC_TOK|$PATH_TOK)"
 HEAD_RE="^(cd|source|\\.|([^[:space:]]*/)?(ba|z|da|k)?sh)([[:blank:]].*)\$"
 SARG_RE="^[[:blank:]]+$SWORD"
 
+# Size of file $1 in bytes, into SIZE (over the cap when unknown).
+file_size() {
+  SIZE="$(wc -c < "$1" 2>/dev/null)"
+  SIZE="${SIZE//[[:space:]]/}"
+  [[ -n $SIZE ]] || SIZE=$(( SCRIPT_MAX_BYTES + 1 ))
+}
+
 # Queue file $1 (run from directory $2) when it is a script to read. $3 is 1
-# for the bare-path form, which counts only an executable text file.
+# for the bare-path form, which counts only an executable text file: a #!
+# line (read without a fork), or else text by `grep -I`, probed once per
+# path, only under the size cap, and for at most MAX_SCAN paths. The first
+# MAX_SCAN scripts are queued once each; later ones go to the OVERFLOW
+# array (a string append would be quadratic), deduped there in one pass.
+# The deduped sets stay small, so their checks stay cheap.
 add_script() {
   [[ -f $1 && -r $1 ]] || return 0
   if [[ $3 == 1 ]]; then
     [[ -x $1 ]] || return 0
-    LC_ALL=C grep -Iq '' "$1" 2>/dev/null || return 0
+    local magic=""
+    IFS= read -r -n 2 magic < "$1" 2>/dev/null
+    if [[ $magic != "#!" ]]; then
+      [[ $PROBES -le $MAX_SCAN ]] || return 0
+      add_to PROBED "$1" || return 0
+      PROBES=$(( PROBES + 1 ))
+      if [[ $PROBES -gt $MAX_SCAN ]]; then
+        SCRIPT_UNREAD=1
+        return 0
+      fi
+      file_size "$1"
+      [[ $SIZE -le $SCRIPT_MAX_BYTES ]] || return 0
+      LC_ALL=C grep -Iq '' "$1" 2>/dev/null || return 0
+    fi
   fi
-  if add_to SCRIPTS "$2	$1"; then
-    bump SCRIPT_COUNT "script files"
+  case "$NL$PARSED$NL" in
+    *"$NL$1$NL"*) return 0 ;;
+  esac
+  if [[ $SCRIPT_COUNT -lt $MAX_SCAN ]]; then
+    add_to PARSED "$1"
+    add_to SCRIPTS "$2	$1"
+    SCRIPT_COUNT=$(( SCRIPT_COUNT + 1 ))
+  else
+    OVERFLOW[${#OVERFLOW[@]}]="$1"
   fi
 }
 
@@ -167,7 +214,18 @@ add_script() {
 if [[ $CMD =~ (sh|source|\.|/) ]]; then
   CUR="$PWD"
   while IFS= read -r tok; do
-    [[ $tok =~ ^$CMD_TOK$ ]] || tok="${tok:1}"
+    if [[ $tok == L ]]; then
+      SCRIPT_UNREAD=1
+      continue
+    fi
+    # Drop the boundary character grep kept in front of the token. A token
+    # starts with a word character, `.`, `/`, `~`, or a quote; any other first
+    # character is the boundary (or sits in an interpreter's path prefix,
+    # which is discarded anyway).
+    case "${tok:0:1}" in
+      [a-zA-Z0-9_./~\"\'-]) ;;
+      *) tok="${tok:1}" ;;
+    esac
     if [[ $tok =~ $HEAD_RE ]]; then
       HEAD="${BASH_REMATCH[1]}"
       ARGS="${BASH_REMATCH[${#BASH_REMATCH[@]} - 1]}"
@@ -189,14 +247,17 @@ if [[ $CMD =~ (sh|source|\.|/) ]]; then
       [[ $HEAD == cd ]] && continue
       resolve_dir "$LAST_WORD" "$PWD"
       add_script "$RESOLVED" "$CUR" "$BARE"
-      resolve_dir "$LAST_WORD" "$CUR"
-      add_script "$RESOLVED" "$CUR" "$BARE"
+      if [[ $CUR != "$PWD" ]]; then
+        resolve_dir "$LAST_WORD" "$CUR"
+        add_script "$RESOLVED" "$CUR" "$BARE"
+      fi
     done
     if [[ $HEAD == cd && -n $LAST_WORD ]]; then
       resolve_dir "$LAST_WORD" "$CUR"
       CUR="$RESOLVED"
     fi
-  done < <(LC_ALL=C grep -aoE "$LEAD$CMD_TOK" <<< "$CMD" 2>/dev/null)
+  done < <(LC_ALL=C grep -aoE "$LEAD$CMD_TOK" <<< "$CMD" 2>/dev/null \
+    | awk -v cap="$LINE_CAP" 'length($0) > cap { print "L"; next } { print }')
 fi
 
 # Pull each script's cd and git commit lines. A line starting with `S` heads
@@ -212,19 +273,42 @@ while IFS=$'\t' read -r from file; do
     SCRIPT_UNREAD=1
     continue
   fi
-  # Repeated git commit lines are dropped here, so a file of them stays cheap.
   TOKS="$(LC_ALL=C grep -aoE "$LEAD($CD_TOK|$GIT_TOK)" "$file" 2>/dev/null \
-    | awk '{ t = $0; sub(/^[^cg]/, "", t) } t ~ /^git/ && seen[t]++ { next } { print }')"
+    | awk -v cap="$LINE_CAP" "$LIMIT_TOKENS")"
   SCRIPT_TOKENS="$SCRIPT_TOKENS${NL}S$from${NL}$TOKS"
   if [[ "$NL$TOKS" =~ $NL[^a-zA-Z0-9_.$NL-]?git[[:blank:]] ]]; then
     SCRIPT_COMMIT=1
   fi
+  if [[ "$NL$TOKS$NL" == *"${NL}L${NL}"* ]]; then
+    SCRIPT_UNREAD=1
+  fi
 done <<< "$SCRIPTS"
+
+# Scripts past the first MAX_SCAN are checked in one grep pass for a commit
+# line. If any of them commits, or they hold more than MAX_SCAN files' worth
+# of bytes in all (too much to read in time; one of them may commit), the
+# command is too much to scan. Sizes come from one `wc -c`, before any read.
+OVERFLOW_HIT=0
+if [[ ${#OVERFLOW[@]} -gt 0 ]]; then
+  OVERFLOW_FILES=()
+  while IFS= read -r file; do
+    [[ -n $file ]] && OVERFLOW_FILES[${#OVERFLOW_FILES[@]}]="$file"
+  done < <(printf '%s\n' "${OVERFLOW[@]}" | sort -u)
+  OVERFLOW_BYTES="$(wc -c "${OVERFLOW_FILES[@]}" 2>/dev/null \
+    | awk -v n="${#OVERFLOW_FILES[@]}" 'NR <= n { s += $1 } END { print s + 0 }')"
+  if [[ $OVERFLOW_BYTES -gt $(( MAX_SCAN * SCRIPT_MAX_BYTES )) ]] \
+    || LC_ALL=C grep -aqE "$LEAD$GIT_TOK" "${OVERFLOW_FILES[@]}" 2>/dev/null; then
+    OVERFLOW_HIT=1
+  fi
+fi
 
 # Only act on a commit: in the command, in a script it runs, or possibly in a
 # script too large to read.
-if ! [[ $CMD =~ $COMMIT_RE ]] && [[ $SCRIPT_COMMIT == 0 && $SCRIPT_UNREAD == 0 ]]; then
+if ! [[ $CMD =~ $COMMIT_RE ]] && [[ $SCRIPT_COMMIT == 0 && $SCRIPT_UNREAD == 0 && $OVERFLOW_HIT == 0 ]]; then
   exit 0
+fi
+if [[ $OVERFLOW_HIT == 1 ]]; then
+  too_many "script files"
 fi
 
 # Every `cd` in the command, each argument word resolved two ways: against the
@@ -264,7 +348,7 @@ done
 SCRIPT_GITS=""
 while IFS= read -r tok; do
   case "$tok" in
-    "") continue ;;
+    ""|L) continue ;;
     S*) SCUR="${tok:1}"; continue ;;
   esac
   tok="${tok#[!cg]}"

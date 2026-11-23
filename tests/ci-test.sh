@@ -891,13 +891,92 @@ cd $B
   run_cmd "${CMD_CDS}bash $S/cap.sh" "$A" "2" "16 command cds + 17 script cds (blocked at the combined cap)"
   run_cmd "cd $BASE/d1; bash $S/cap.sh" "$A" "0" "1 command cd + 17 script cds (allowed, under the cap)"
 
-  # More than 32 script files in one command block like the other caps.
-  SCRIPTS33=""
-  for i in $(seq 33); do
+  # Only 32 scripts are parsed. Past that, the rest are checked for a commit
+  # only, so naming many scripts without running a commit is not blocked.
+  fresh_repo "$B" dirty
+  MANY_SH=""
+  for i in $(seq 40); do
     script "$S/n$i.sh" "echo $i"
-    SCRIPTS33="${SCRIPTS33}bash $S/n$i.sh; "
+    MANY_SH="$MANY_SH $S/n$i.sh"
   done
-  run_cmd "${SCRIPTS33}git commit -m x" "$A" "2" "33 script files in one command (blocked at the cap)"
+  run_cmd "git add$MANY_SH" "$A" "0" "git add <40 scripts>, no commit (allowed)"
+  run_cmd "shellcheck$MANY_SH" "$A" "0" "shellcheck <40 scripts>, no commit (allowed)"
+  run_cmd "git add$MANY_SH && git commit -m x" "$A" "0" "git add <40 scripts> && git commit, none commits (allowed)"
+  script "$S/n40.sh" "cd $B
+git commit -m wip"
+  run_cmd "git add$MANY_SH" "$A" "2" "40 scripts, the 40th commits (blocked at the cap)"
+  fresh_repo "$B" clean
+
+  # Review regressions, each also timed against the hook's 10 s timeout (a
+  # timed-out hook lets the commit through). run_timed asserts the exit code
+  # and that the hook finished within "$5" whole seconds.
+  run_timed() {
+    local cmd="$1" cwd="$2" expected="$3" label="$4" limit="$5" input code start elapsed
+    input="$(jq -n --arg cmd "$cmd" --arg cwd "$cwd" '{tool_input:{command:$cmd}, cwd:$cwd}')"
+    start=$SECONDS
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    code=$?
+    set -e
+    elapsed=$(( SECONDS - start ))
+    assert_eq "$code" "$expected" "$label"
+    if [[ $elapsed -le $limit ]]; then
+      echo "  PASS: $label finished in ${elapsed}s (limit ${limit}s)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: $label took ${elapsed}s (limit ${limit}s)"
+      FAIL=$((FAIL + 1))
+    fi
+  }
+
+  # One 255 KB quoted cd word: bash string work on it was quadratic. The long
+  # line is not parsed; the cd after it still is.
+  fresh_repo "$B" dirty
+  {
+    printf '#!/usr/bin/env bash\ncd '
+    head -c 85000 /dev/zero | tr '\0' 'x' | sed 's/x/"a"/g'
+    printf '\ncd %s\ngit commit -m wip\n' "$B"
+  } > "$S/longword.sh"
+  run_timed "git commit -m x && bash $S/longword.sh" "$A" "2" "script with a 255 KB cd word, secret in repoB (blocked)" 4
+  # 40000 quoted words on one 240 KB cd line: each word cost a copy of the
+  # rest of the line. The line is not parsed; the cd after it still is.
+  {
+    printf '#!/usr/bin/env bash\ncd'
+    head -c 40000 /dev/zero | tr '\0' 'x' | sed 's/x/ "a b"/g'
+    printf '\ncd %s\ngit commit -m wip\n' "$B"
+  } > "$S/quoted-words.sh"
+  run_timed "bash $S/quoted-words.sh" "$A" "2" "script with a 240 KB line of quoted cd words, secret in repoB (blocked)" 4
+  fresh_repo "$B" clean
+
+  # A large executable text file named many times is examined once, and its
+  # size is checked before any read of its content.
+  fresh_repo "$A" dirty
+  head -c 100000000 /dev/zero | tr '\0' 'a' > "$A/big"
+  chmod +x "$A/big"
+  BIG20=""
+  for i in $(seq 20); do
+    BIG20="$BIG20 ./big"
+  done
+  run_timed "git commit -m x; :$BIG20" "$A" "2" "100 MB executable named 20 times, secret in cwd (blocked)" 2
+  rm -f "$A/big"
+  fresh_repo "$A" clean
+
+  # Scripts past the first 32 are only grepped for a commit, and only up to
+  # 32 files' worth of bytes in all; past that they are too much to read in
+  # time, one may commit, so the command is blocked.
+  OVER=""
+  {
+    printf '#!/usr/bin/env bash\n'
+    head -c 255000 /dev/zero | tr '\0' '#'
+    printf '\n'
+  } > "$S/over-tmpl"
+  for i in $(seq 66); do
+    cp "$S/over-tmpl" "$S/over$i.sh"
+    chmod +x "$S/over$i.sh"
+    OVER="$OVER $S/over$i.sh"
+  done
+  run_timed "git add$OVER" "$A" "2" "66 scripts of 255 KB: the 34 past the parse cap exceed 8 MiB (blocked)" 4
+  run_timed "git add$(printf ' %s' $(seq -f "$S/over%g.sh" 40))" "$A" "0" "40 scripts of 255 KB, no commit (allowed)" 4
 
   # Word caps keep a crafted file or command inside the hook's time limit (a
   # timed-out hook lets the commit through). Over 1024 cd words in scripts
