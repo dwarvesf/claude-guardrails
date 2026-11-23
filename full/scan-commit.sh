@@ -127,6 +127,8 @@ add_cand() {
 # in one pass, printing `T dir` per cd / git -C target and `G` for a commit.
 # A cd, -C or script word over cap prints LONG; over tcap refs or targets,
 # MANY. Command heredoc bodies are skipped (COMMIT_RE still reads them).
+# The lexer only finds scripts and targets: a script commits when its text
+# holds the word `commit` anywhere (a plain grep, so no parse can miss it).
 # Scripts run by scripts are not followed.
 SCRIPT_MAX_FILES=64
 SCRIPT_MAX_BYTES=2097152
@@ -164,17 +166,20 @@ function pop() {
 function word(v,   b, k, pp) {
   if (hdnext) { hdnext = 0; hdp = v; sub(/^-/, "", hdp); return }
   if (skip) { skip = 0; return }
-  if (cmd) {
+  if (cmd || wrap) {
+    # After a wrapper (sudo, env, timeout, ...) every word is a candidate
+    # command, so no wrapper option can hide the interpreter (fail closed).
     b = v; if (index(v, "/")) { k = split(v, pp, "/"); b = pp[k] }
     if (v ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
-    if (b ~ /^(sudo|env|exec|nohup|time|timeout|command|builtin|nice|xargs|then|do|else|elif|if|while|until|!|\{|\})$/) { wrap = 1; return }
-    if (wrap && v ~ /^[-0-9]/) return
-    cmd = 0; wrap = 0
+    if (!wrap && v ~ /^(then|do|else|elif|if|while|until|!|\{|\})$/) return
+    if (b ~ /^(sudo|doas|env|exec|nohup|time|timeout|command|builtin|nice|xargs|stdbuf|setsid)$/) { wrap = 1; cmd = 0; return }
     if (b ~ /^(ba|z|da|k)?sh$/) { st = "sh"; dd = 0 }
     else if (v == "source" || v == ".") st = "src"
     else if (v == "cd") { st = "cd"; cdb = cur }
-    else if (v == "git") { st = "git"; gb = cur; gn = 0; gC = 0; gc = 0 }
+    else if (b == "git") { st = "git"; gb = cur; gc = 0 }
+    else if (wrap && !index(v, "/")) return
     else { st = ""; if (index(v, "/")) ref("X", v) }
+    cmd = 0; wrap = 0
     return
   }
   if (st == "sh") {
@@ -190,13 +195,9 @@ function word(v,   b, k, pp) {
   } else if (st == "cd") {
     if (v !~ /^-/) { long(); target(v); cur = compose(cdb, v); target(cur) }
   } else if (st == "git") {
-    if (gC) { gC = 0; long(); target(v); gb = compose(gb, v); gt[++gn] = gb; return }
-    if (gc) { gc = 0; return }
-    if (v == "-C") { gC = 1; return }
-    if (v == "-c") { gc = 1; return }
-    if (v ~ /^-/) return
-    if (v == "commit") { commit = 1; for (k = 1; k <= gn; k++) target(gt[k]) }
-    st = ""
+    if (gc) { gc = 0; long(); target(v); gb = compose(gb, v); target(gb); return }
+    if (v == "-C") gc = 1
+    else if (v !~ /^-/) st = ""
   }
 }
 FNR == 1 {
@@ -265,7 +266,6 @@ FNR == 1 {
   } else sep()
   if (hdp != "") { hd = hdp; hdp = "" }
 }
-END { if (commit) print "G" }
 AWK
 lex() {
   LC_ALL=C awk -v mode="$1" -v cap="$LINE_MAX" -v tcap="$SCRIPT_MAX_FILES" "$LEX" "${@:2}"
@@ -293,8 +293,9 @@ check_lex() {
 }
 
 # Resolve each script against the directory earlier cds lead to and the cwd.
-# An S word must be a readable file; an X word counts when it is an
-# executable text file (no NUL in its first 8 KiB).
+# An S word must be a readable file. An X word that is executable is a script
+# if it starts with #! or holds no NUL in its first 8 KiB, is skipped if it is
+# empty or an ELF or Mach-O binary, and blocks otherwise.
 SCRIPT_FILES=()
 SCRIPTS=""
 STARTS="$PWD"
@@ -314,7 +315,13 @@ while IFS=$'\t' read -r tag kind from word; do
     file="$RESOLVED"
     [[ -f $file && -r $file ]] || continue
     if [[ $kind == X ]]; then
-      [[ -x $file ]] && head -c 8192 "$file" | LC_ALL=C grep -Iq '' || continue
+      [[ -x $file ]] || continue
+      case "$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n')" in
+        2321*) ;;
+        "" | 7f454c46 | cffaedfe | cefaedfe | feedfacf | feedface | cafebabe | bebafeca) continue ;;
+        *) head -c 8192 "$file" | LC_ALL=C grep -Iq '' \
+          || block_script "\`$word\` is an executable that is neither a script nor an ELF or Mach-O binary" ;;
+      esac
     fi
     found=1
     add_to SCRIPTS "$file" && SCRIPT_FILES[${#SCRIPT_FILES[@]}]="$file"
@@ -339,7 +346,7 @@ if [[ ${#SCRIPT_FILES[@]} -gt 0 ]]; then
   fi
   SCRIPT_TARGETS="$(lex script "${SCRIPT_FILES[@]}")"
   check_lex "$SCRIPT_TARGETS"
-  [[ "$NL$SCRIPT_TARGETS$NL" == *"${NL}G${NL}"* ]] && SCRIPT_COMMIT=1
+  LC_ALL=C grep -aqw commit "${SCRIPT_FILES[@]}" 2>/dev/null && SCRIPT_COMMIT=1
 fi
 
 # Only act on a commit, in the command or in a script it runs.

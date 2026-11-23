@@ -1045,6 +1045,37 @@ git commit -m wip"
   run_cmd "git commit -m \"docs; bash nothing-here.sh\"" "$A" "0" "a quoted 'bash x' inside a commit message is not a script (allowed)"
   fresh_repo "$B" clean
 
+  # Review round 3. (1) A script commits when its text holds the word commit,
+  # so no parse can miss a commit the lexer does not model.
+  fresh_repo "$B" dirty
+  script "$S/abs-git.sh" "cd $B
+/usr/bin/git commit -m wip"
+  run_cmd "bash $S/abs-git.sh" "$A" "2" "script runs /usr/bin/git commit (blocked)"
+  script "$S/sh-c-git.sh" "cd $B
+sh -c 'git commit -m wip'"
+  run_cmd "bash $S/sh-c-git.sh" "$A" "2" "script runs sh -c 'git commit' (blocked)"
+  script "$S/eval-git.sh" "cd $B
+eval \"git commit -m wip\""
+  run_cmd "bash $S/eval-git.sh" "$A" "2" "script runs eval \"git commit\" (blocked)"
+  script "$S/dash-c-git.sh" "cd $B
+git -c user.name=x commit -m wip"
+  run_cmd "bash $S/dash-c-git.sh" "$A" "2" "script runs git -c k=v commit (blocked)"
+
+  # (2) An executable run by path: #! is a script even with NUL bytes; an
+  # executable that is neither text nor ELF / Mach-O blocks.
+  { printf '#!/usr/bin/env bash\ncd %s\ngit commit -m wip\n' "$B"; printf 'junk\0\0junk\n'; } > "$S/nul-script"
+  printf 'AB\0\0junk\n' > "$S/odd-exec"
+  chmod +x "$S/nul-script" "$S/odd-exec"
+  run_cmd "$S/nul-script" "$A" "2" "#! script with NUL bytes run by path (blocked)"
+  run_cmd "$S/odd-exec" "$A" "2" "executable neither text nor ELF / Mach-O (blocked)"
+
+  # (3) Wrapper options cannot hide the interpreter.
+  run_cmd "sudo -u nobody bash $COMMIT_SH" "$A" "2" "sudo -u <user> bash <script> (blocked)"
+  run_cmd "env -u FOO bash $COMMIT_SH" "$A" "2" "env -u <var> bash <script> (blocked)"
+  run_cmd "timeout -s KILL 10 bash $COMMIT_SH" "$A" "2" "timeout -s KILL 10 bash <script> (blocked)"
+  fresh_repo "$B" clean
+  run_cmd "if true; then echo bash is ok; fi" "$A" "0" "if / then keywords do not turn echo words into scripts (allowed)"
+
   finish
 }
 

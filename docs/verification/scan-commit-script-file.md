@@ -328,3 +328,70 @@ reviewer repro: git commit; : <32 scripts>           /bin/bash              exit
 plain non-commit command                             /opt/homebrew/bin/bash exit=0  0.04s
 plain non-commit command                             /bin/bash              exit=0  0.03s
 ```
+
+## Review round 3 (after 1181cd0)
+
+Three findings folded in: the commit decision moves from the lexer to a plain `grep -w commit` over the script files (a parser differential failed open on `/usr/bin/git commit`, `sh -c 'git commit'` and `eval`). An executable run by path is a script if it starts with `#!` or has no NUL in its first 8 KiB, is skipped if it is empty or ELF / Mach-O, and blocks otherwise. After a wrapper (`sudo`, `env`, `timeout`, ...) every word is checked as a possible command. `full/scan-commit.sh`: 543 lines at `1181cd0`, 550 after (556 at `ab2cc08`).
+
+Full suite after: 17 scenarios, 291 passed, 0 failed (281 at `1181cd0`):
+
+```
+lite-fresh                   Results: 12 passed, 0 failed
+full-fresh                   Results: 15 passed, 0 failed
+lite-idempotent              Results: 4 passed, 0 failed
+full-idempotent              Results: 5 passed, 0 failed
+lite-roundtrip               Results: 10 passed, 0 failed
+full-roundtrip               Results: 11 passed, 0 failed
+merge-existing               Results: 14 passed, 0 failed
+legacy-deny-migration        Results: 7 passed, 0 failed
+scan-commit                  Results: 8 passed, 0 failed
+scan-commit-cargo-lock       Results: 15 passed, 0 failed
+scan-commit-target-repo      Results: 34 passed, 0 failed
+scan-commit-script-file      Results: 77 passed, 0 failed
+push-hook                    Results: 13 passed, 0 failed
+schema-remediation           Results: 4 passed, 0 failed
+bip39-scan                   Results: 16 passed, 0 failed
+wallet-key-regex             Results: 9 passed, 0 failed
+scan-secrets-hash-context    Results: 37 passed, 0 failed
+```
+
+The four scan-commit scenarios (8 / 15 / 34 / 77 passed, 0 failed) also pass with `/bin/bash` 3.2.57, with the system awk, mawk 1.3.4 and gawk 5.4.1, and in `ubuntu:24.04` (mawk 1.3.4, GNU grep 3.11, bash 5.2.21).
+
+Negative control, the final scenario against the `1181cd0` hook:
+
+```
+  FAIL: script runs /usr/bin/git commit (blocked) — expected '2', got '0'
+  FAIL: script runs sh -c 'git commit' (blocked) — expected '2', got '0'
+  FAIL: script runs eval "git commit" (blocked) — expected '2', got '0'
+  FAIL: #! script with NUL bytes run by path (blocked) — expected '2', got '0'
+  FAIL: executable neither text nor ELF / Mach-O (blocked) — expected '2', got '0'
+  FAIL: sudo -u <user> bash <script> (blocked) — expected '2', got '0'
+  FAIL: env -u <var> bash <script> (blocked) — expected '2', got '0'
+  FAIL: timeout -s KILL 10 bash <script> (blocked) — expected '2', got '0'
+Results: 69 passed, 8 failed
+```
+
+Timing, final hook (bash 5.3 then `/bin/bash` 3.2):
+
+```
+reviewer repro: git commit; : <32 scripts>           /opt/homebrew/bin/bash exit=2  0.07s
+reviewer repro: git commit; : <32 scripts>           /bin/bash              exit=2  0.07s
+32 x 16 lines run (2 MB, quote-heavy)                /opt/homebrew/bin/bash exit=2  1.03s
+32 x 16 lines run (2 MB, quote-heavy)                /bin/bash              exit=2  0.99s
+255 KB quoted cd word                                /opt/homebrew/bin/bash exit=2  0.14s
+255 KB quoted cd word                                /bin/bash              exit=2  0.14s
+2 MB plain-text script                               /opt/homebrew/bin/bash exit=2  0.17s
+2 MB plain-text script                               /bin/bash              exit=2  0.17s
+2 MB of short cd lines and separators                /opt/homebrew/bin/bash exit=2  0.04s
+2 MB of short cd lines and separators                /bin/bash              exit=2  0.05s
+2 MB of git -C commit lines (50 targets)             /opt/homebrew/bin/bash exit=2  0.36s
+2 MB of git -C commit lines (50 targets)             /bin/bash              exit=2  0.39s
+2 MB single line of short words                      /opt/homebrew/bin/bash exit=2  0.49s
+2 MB single line of short words                      /bin/bash              exit=2  0.50s
+2 MB single line of quoted words                     /opt/homebrew/bin/bash exit=2  0.97s
+2 MB single line of quoted words                     /bin/bash              exit=2  0.97s
+1 MB single-line command, no script                  /opt/homebrew/bin/bash exit=0  0.29s
+1 MB single-line command, no script                  /bin/bash              exit=0  0.33s
+plain non-commit command                             /opt/homebrew/bin/bash exit=0  0.04s
+plain non-commit command                             /bin/bash              exit=0  0.03s
+```
