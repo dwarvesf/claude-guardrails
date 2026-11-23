@@ -845,17 +845,14 @@ git -C repoB commit -m wip"
   # A binary on an absolute path is not read as a script.
   run_cmd "/bin/ls $B" "$A" "0" "absolute path to a binary is not read (allowed)"
 
-  # A script over the size cap is not read, so the command counts as a commit
-  # and the cwd is scanned (fail closed, as for an unresolvable cd target).
+  # Scripts over the 2 MiB budget cannot be read in time, so the command is
+  # blocked outright, even with every repo clean.
   BIG_SH="$S/big.sh"
   script "$BIG_SH" "echo hi"
-  head -c 300000 /dev/zero | tr '\0' '#' >> "$BIG_SH"
+  head -c 2200000 /dev/zero | tr '\0' '#' >> "$BIG_SH"
   printf '\ncd %s\ngit commit -m wip\n' "$B" >> "$BIG_SH"
-  fresh_repo "$A" dirty
-  run_cmd "bash $BIG_SH" "$A" "2" "script over the size cap: cwd still scanned (blocked)"
-  fresh_repo "$A" clean
-  # The cap is per file: a filler script just under it does not use up a
-  # budget that would leave the commit script unread.
+  run_cmd "bash $BIG_SH" "$A" "2" "script over the 2 MiB budget (blocked)"
+  # A filler script under the budget does not leave the commit script unread.
   FILL_SH="$S/filler.sh"
   script "$FILL_SH" "echo hi"
   head -c 262000 /dev/zero | tr '\0' '#' >> "$FILL_SH"
@@ -891,8 +888,8 @@ cd $B
   run_cmd "${CMD_CDS}bash $S/cap.sh" "$A" "2" "16 command cds + 17 script cds (blocked at the combined cap)"
   run_cmd "cd $BASE/d1; bash $S/cap.sh" "$A" "0" "1 command cd + 17 script cds (allowed, under the cap)"
 
-  # Only 32 scripts are parsed. Past that, the rest are checked for a commit
-  # only, so naming many scripts without running a commit is not blocked.
+  # Scripts named as arguments (git add, shellcheck) do not run, so they are
+  # not read. Scripts the command runs are, up to 64.
   fresh_repo "$B" dirty
   MANY_SH=""
   for i in $(seq 40); do
@@ -904,7 +901,12 @@ cd $B
   run_cmd "git add$MANY_SH && git commit -m x" "$A" "0" "git add <40 scripts> && git commit, none commits (allowed)"
   script "$S/n40.sh" "cd $B
 git commit -m wip"
-  run_cmd "git add$MANY_SH" "$A" "2" "40 scripts, the 40th commits (blocked at the cap)"
+  run_cmd "git add$MANY_SH" "$A" "0" "git add <40 scripts>, the 40th commits but does not run (allowed)"
+  RUN40=""
+  for i in $(seq 40); do
+    RUN40="${RUN40}bash $S/n$i.sh; "
+  done
+  run_cmd "$RUN40" "$A" "2" "40 scripts run, the 40th commits into a repo with a secret (blocked)"
   fresh_repo "$B" clean
 
   # Review regressions, each also timed against the hook's 10 s timeout (a
@@ -929,8 +931,8 @@ git commit -m wip"
     fi
   }
 
-  # One 255 KB quoted cd word: bash string work on it was quadratic. The long
-  # line is not parsed; the cd after it still is.
+  # One 255 KB quoted cd word: bash string work on it was quadratic. A cd,
+  # git -C, or script word over 4096 characters now blocks outright.
   fresh_repo "$B" dirty
   {
     printf '#!/usr/bin/env bash\ncd '
@@ -939,7 +941,7 @@ git commit -m wip"
   } > "$S/longword.sh"
   run_timed "git commit -m x && bash $S/longword.sh" "$A" "2" "script with a 255 KB cd word, secret in repoB (blocked)" 4
   # 40000 quoted words on one 240 KB cd line: each word cost a copy of the
-  # rest of the line. The line is not parsed; the cd after it still is.
+  # rest of the line. The lexer is linear, and the cd after it is still read.
   {
     printf '#!/usr/bin/env bash\ncd'
     head -c 40000 /dev/zero | tr '\0' 'x' | sed 's/x/ "a b"/g'
@@ -961,9 +963,7 @@ git commit -m wip"
   rm -f "$A/big"
   fresh_repo "$A" clean
 
-  # Scripts past the first 32 are only grepped for a commit, and only up to
-  # 32 files' worth of bytes in all; past that they are too much to read in
-  # time, one may commit, so the command is blocked.
+  # More than 64 scripts, or more than 2 MiB of them, in one command block.
   OVER=""
   {
     printf '#!/usr/bin/env bash\n'
@@ -975,28 +975,75 @@ git commit -m wip"
     chmod +x "$S/over$i.sh"
     OVER="$OVER $S/over$i.sh"
   done
-  run_timed "git add$OVER" "$A" "2" "66 scripts of 255 KB: the 34 past the parse cap exceed 8 MiB (blocked)" 4
+  run_timed "git add$OVER" "$A" "0" "git add <66 scripts of 255 KB> (allowed, nothing runs)" 4
   run_timed "git add$(printf ' %s' $(seq -f "$S/over%g.sh" 40))" "$A" "0" "40 scripts of 255 KB, no commit (allowed)" 4
+  run_timed "$(printf 'bash %s; ' $OVER)" "$A" "2" "66 scripts run in one command (blocked: over 64)" 4
+  run_timed "$(printf 'bash %s; ' $(seq -f "$S/over%g.sh" 9))" "$A" "2" "9 scripts of 255 KB run (blocked: over 2 MiB)" 4
 
-  # Word caps keep a crafted file or command inside the hook's time limit (a
-  # timed-out hook lets the commit through). Over 1024 cd words in scripts
-  # blocks; over 1024 words in the command stops the walk and the cwd is
-  # scanned. Nothing is staged with a secret except where noted.
+  # More than 64 distinct cd / git -C targets in the scripts block. Many
+  # words in the command are fine when none runs a script.
   WIDE=""
   for i in $(seq 42); do
     WIDE="${WIDE}cd a b c d e f g h i j k l m n o p q r s t u v w x y
 "
   done
   script "$S/wide-cd.sh" "${WIDE}git commit -m wip"
-  run_cmd "bash $S/wide-cd.sh" "$A" "2" "script with 1050 cd words (blocked at the word cap)"
+  run_cmd "bash $S/wide-cd.sh" "$A" "2" "script with 1050 cd words (blocked at the 64-target cap)"
   WORDS=""
   for i in $(seq 1100); do
     WORDS="$WORDS ./w$i"
   done
   run_cmd "echo$WORDS; bash $S/status.sh" "$A" "0" "command with 1100 path words, clean cwd (allowed)"
   fresh_repo "$A" dirty
-  run_cmd "echo$WORDS; bash $S/status.sh" "$A" "2" "command with 1100 path words: walk stops, cwd scanned (blocked)"
+  run_cmd "echo$WORDS; bash $S/status.sh" "$A" "0" "command with 1100 path words, secret in cwd, no commit (allowed)"
   fresh_repo "$A" clean
+
+  # Review round 2. (1) The reviewer's repro: 32 scripts of 32 lines of a
+  # 3.9 KB quoted cd word, named as arguments, then 16 lines of each run.
+  fresh_repo "$A" dirty
+  mkdir -p "$A/o2"
+  QWORD="$(head -c 1300 /dev/zero | tr '\0' 'x' | sed 's/x/"a"/g')"
+  R32=""
+  RUN32=""
+  for i in $(seq 0 31); do
+    { printf '#!/usr/bin/env bash\n'; for j in $(seq 32); do printf 'cd %s\n' "$QWORD"; done; } > "$A/o2/r$i"
+    { printf '#!/usr/bin/env bash\n'; for j in $(seq 16); do printf 'cd %s\n' "$QWORD"; done; } > "$A/o2/h$i"
+    chmod +x "$A/o2/r$i" "$A/o2/h$i"
+    R32="$R32 ./o2/r$i"
+    RUN32="${RUN32}bash ./o2/h$i; "
+  done
+  run_timed "git commit -m x; :$R32" "$A" "2" "32x32 quoted cd words named, secret in cwd (blocked)" 2
+  run_timed "git commit -m x; $RUN32" "$A" "2" "32x16 quoted cd words run (2 MB), secret in cwd (blocked)" 2
+  run_timed "git commit -m x; $(printf 'bash ./o2/r%s; ' $(seq 0 31))" "$A" "2" "32x32 quoted cd words run (4 MB, over budget) (blocked)" 2
+  fresh_repo "$A" clean
+
+  # (2) An executable run by path over the budget blocks; it is never skipped.
+  { printf '#!/usr/bin/env bash\n'; head -c 2200000 /dev/zero | tr '\0' '#'; printf '\n'; } > "$S/bigexec"
+  head -c 2200000 /dev/zero | tr '\0' 'a' > "$S/bigtext"
+  chmod +x "$S/bigexec" "$S/bigtext"
+  run_cmd "$S/bigexec" "$A" "2" "#! executable over 2 MiB run by path (blocked)"
+  run_cmd "$S/bigtext" "$A" "2" "text executable over 2 MiB run by path (blocked)"
+
+  # (3) A long word beside a git -C does not hide the -C target.
+  fresh_repo "$B" dirty
+  script "$S/long-c.sh" "git -C $B -c user.name=$(head -c 5000 /dev/zero | tr '\0' 'x') commit -m wip"
+  run_cmd "bash $S/long-c.sh" "$A" "2" "script git -C <repoB> beside a 5000-char option (blocked)"
+  fresh_repo "$B" clean
+
+  # (4) An over-long script path in the command blocks; a long argument that
+  # is not a script path does not.
+  LONGP="$(head -c 5000 /dev/zero | tr '\0' 'x')"
+  run_cmd "bash /tmp/$LONGP.sh" "$A" "2" "bash <5000-char script path> (blocked)"
+  run_cmd "echo \"$LONGP $LONGP\" && git status" "$A" "0" "echo <10000-char argument> (allowed)"
+
+  # (5) Only the first non-option argument after the interpreter is the script.
+  fresh_repo "$B" dirty
+  run_cmd "bash $S/status.sh $COMMIT_SH" "$A" "0" "bash <script> <commit script as an argument> (allowed)"
+  run_cmd "bash -c \"echo hi\" $COMMIT_SH" "$A" "0" "bash -c <string> (no script file, allowed)"
+  run_cmd "bash $S/missing.sh" "$A" "2" "bash <missing script> (blocked)"
+  run_cmd "bash \"\$DIR/commit.sh\"" "$A" "2" "bash <variable script path> (blocked)"
+  run_cmd "git commit -m \"docs; bash nothing-here.sh\"" "$A" "0" "a quoted 'bash x' inside a commit message is not a script (allowed)"
+  fresh_repo "$B" clean
 
   finish
 }

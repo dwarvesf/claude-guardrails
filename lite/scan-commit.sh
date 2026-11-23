@@ -11,9 +11,11 @@
 #
 # Fail closed on the target repo: the hook does not guess which repo the
 # commit lands in. It scans the payload cwd (always) plus every repo named by
-# any `cd` or `git -C` in the command, or in a script file the command runs,
-# and blocks if any of them has a staged secret. A regex cannot parse shell exactly, so picking one target would let a
+# any `cd` or `git -C` in the command, and blocks if any of them has a staged
+# secret. A regex cannot parse shell exactly, so picking one target would let a
 # crafted command steer the scan away from the repo that holds the secret.
+# A script file the command runs is read too (never run): its `git commit`
+# makes the command a commit, and its `cd` / `git -C` targets are scanned.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -92,7 +94,7 @@ too_many() {
     echo "==================== COMMIT BLOCKED: TOO MANY DIRECTORIES TO SCAN ===================="
     echo ""
     echo "The command names too many directories to scan for staged secrets"
-    echo "within the hook's time limit (more than ${2:-$MAX_SCAN} $1)."
+    echo "within the hook's time limit (more than $MAX_SCAN $1)."
     echo ""
     echo "The commit was NOT created."
     echo ""
@@ -103,12 +105,11 @@ too_many() {
   } >&2
   exit 2
 }
-# Increment the counter named $1; block when it passes MAX_SCAN, or $3 when
-# given ($2 names it).
+# Increment the counter named $1; block when it passes MAX_SCAN ($2 names it).
 bump() {
   printf -v "$1" '%s' "$(( ${!1} + 1 ))"
-  if [[ ${!1} -gt ${3:-$MAX_SCAN} ]]; then
-    too_many "$2" "${3:-}"
+  if [[ ${!1} -gt $MAX_SCAN ]]; then
+    too_many "$2"
   fi
 }
 add_cand() {
@@ -117,198 +118,233 @@ add_cand() {
   fi
 }
 
-# Script files. A commit can run inside a script the command runs, where the
-# command text shows neither `git commit` nor the repo it lands in. Each script
-# the command names is read (never run) and its `cd` and `git commit` lines
-# join the checks below. Forms: `bash|sh|zsh|dash|ksh [opts] <file>` (also by
-# path, e.g. /bin/bash), `source <file>`, `. <file>`, and `./file` or any
-# path to an executable text file. Every argument word after an interpreter is
-# tried as a file; words that are not files drop out. Script text is parsed
-# with one grep per file, linear in its size, and only its directories that
-# exist count toward the cap, so a script with many cds into a few
-# directories is not blocked. Scripts the scripts run are not followed.
-# WORD_CAP bounds the per-word work: past it, the command walk stops and the
-# command counts as a commit (cwd scanned), and script cd words block.
-# LINE_CAP bounds one token line (no real path is longer), because bash
-# string work on one huge word is quadratic; a longer line is not parsed and
-# the command counts as a commit. Only MAX_SCAN scripts are parsed; past
-# that, the rest are only checked for a commit, and the cap blocks only when
-# one of them could commit, so `git add` or `shellcheck` over many scripts
-# still runs.
-SCRIPT_MAX_BYTES=262144
-WORD_CAP=1024
-LINE_CAP=4096
-CMD_WORDS=0
-SCRIPT_CD_WORDS=0
-SCRIPT_COUNT=0
-SCRIPT_UNREAD=0
-SCRIPT_COMMIT=0
-PROBES=0
-SCRIPTS=""
-PARSED=""
-PROBED=""
-OVERFLOW=()
-# Print the token lines on stdin, a line longer than LINE_CAP as `L` (a token
-# never is one capital letter), and each repeated git commit line once.
-LIMIT_TOKENS='length($0) > cap { print "L"; next }
-  { t = $0; sub(/^[^cg]/, "", t) } t ~ /^git/ && seen[t]++ { next } { print }'
-# Like WORD, but also stops at a redirection or backquote (`x.sh>log`).
-SWORD="((\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\;&|)<>\`])+)"
-CD_TOK="cd([[:blank:]]+$SWORD)+"
-SH_TOK="([^[:space:]\"'\\\\;&|)<>\`]*/)?(ba|z|da|k)?sh([[:blank:]]+$SWORD)+"
-SRC_TOK="(source|\\.)[[:blank:]]+$SWORD"
-PATH_TOK="(\"(\\.\\.?|~)?/[^\"]*\"|'(\\.\\.?|~)?/[^']*'|(\\.\\.?|~)?/$SWORD)"
-GIT_TOK="git([[:blank:]]+-[Cc][[:blank:]]+$WORD)*[[:blank:]]+commit([[:blank:]]|\$)"
-LEAD="(^|[^a-zA-Z0-9_.-])"
-CMD_TOK="($CD_TOK|$SH_TOK|$SRC_TOK|$PATH_TOK)"
-HEAD_RE="^(cd|source|\\.|([^[:space:]]*/)?(ba|z|da|k)?sh)([[:blank:]].*)\$"
-SARG_RE="^[[:blank:]]+$SWORD"
-
-# Size of file $1 in bytes, into SIZE (over the cap when unknown).
-file_size() {
-  SIZE="$(wc -c < "$1" 2>/dev/null)"
-  SIZE="${SIZE//[[:space:]]/}"
-  [[ -n $SIZE ]] || SIZE=$(( SCRIPT_MAX_BYTES + 1 ))
+# Script files: a commit can run inside a script the command runs. LEX is a
+# shell lexer in awk, linear in its input (quotes, escapes, comments, $(...),
+# backquotes, separators, redirections, heredocs). mode=cmd prints
+# `R kind dir word` per script run: kind S is the first non-option argument of
+# bash/sh/zsh/dash/ksh (none with -c or -s), source or `.`; kind X a command
+# given by path; dir is where earlier cds lead. mode=script lexes all scripts
+# in one pass, printing `T dir` per cd / git -C target and `G` for a commit.
+# A cd, -C or script word over cap prints LONG; over tcap refs or targets,
+# MANY. Command heredoc bodies are skipped (COMMIT_RE still reads them).
+# Scripts run by scripts are not followed.
+SCRIPT_MAX_FILES=64
+SCRIPT_MAX_BYTES=2097152
+LINE_MAX=4096
+read -r -d '' LEX <<'AWK' || true
+function out(line) {
+  if (line in seen) return
+  seen[line] = 1
+  if (++count > tcap) { print "MANY"; exit }
+  print line
 }
-
-# Queue file $1 (run from directory $2) when it is a script to read. $3 is 1
-# for the bare-path form, which counts only an executable text file: a #!
-# line (read without a fork), or else text by `grep -I`, probed once per
-# path, only under the size cap, and for at most MAX_SCAN paths. The first
-# MAX_SCAN scripts are queued once each; later ones go to the OVERFLOW
-# array (a string append would be quadratic), deduped there in one pass.
-# The deduped sets stay small, so their checks stay cheap.
-add_script() {
-  [[ -f $1 && -r $1 ]] || return 0
-  if [[ $3 == 1 ]]; then
-    [[ -x $1 ]] || return 0
-    local magic=""
-    IFS= read -r -n 2 magic < "$1" 2>/dev/null
-    if [[ $magic != "#!" ]]; then
-      [[ $PROBES -le $MAX_SCAN ]] || return 0
-      add_to PROBED "$1" || return 0
-      PROBES=$(( PROBES + 1 ))
-      if [[ $PROBES -gt $MAX_SCAN ]]; then
-        SCRIPT_UNREAD=1
-        return 0
-      fi
-      file_size "$1"
-      [[ $SIZE -le $SCRIPT_MAX_BYTES ]] || return 0
-      LC_ALL=C grep -Iq '' "$1" 2>/dev/null || return 0
-    fi
-  fi
-  case "$NL$PARSED$NL" in
-    *"$NL$1$NL"*) return 0 ;;
-  esac
-  if [[ $SCRIPT_COUNT -lt $MAX_SCAN ]]; then
-    add_to PARSED "$1"
-    add_to SCRIPTS "$2	$1"
-    SCRIPT_COUNT=$(( SCRIPT_COUNT + 1 ))
-  else
-    OVERFLOW[${#OVERFLOW[@]}]="$1"
-  fi
+function compose(b, x) { return (x ~ /^[\/~]/ || b == "") ? x : b "/" x }
+function long() { if (big) { print "LONG"; exit } }
+function ref(kind, v) { long(); if (mode == "cmd") out("R\t" kind "\t" (cur == "" ? "." : cur) "\t" v) }
+function target(p) { if (mode == "script" && length(p) <= cap) out("T\t" p) }
+function sep() { word_end(i); cmd = 1; st = ""; skip = 0; wrap = 0 }
+function word_end(e,   w) {
+  if (!inw) return
+  inw = 0
+  if (length(raw) <= cap) raw = raw substr(L, ws, e - ws)
+  w = raw; raw = ""; big = length(w) > cap
+  gsub(/["'\\]/, "", w)
+  word(w)
 }
-
-# Walk the command's cd and script tokens in order, so a relative script path
-# resolves against the payload cwd and against the directory the cds lead to.
-if [[ $CMD =~ (sh|source|\.|/) ]]; then
-  CUR="$PWD"
-  while IFS= read -r tok; do
-    if [[ $tok == L ]]; then
-      SCRIPT_UNREAD=1
+function push(t) {
+  sraw[++depth] = (inw ? raw substr(L, ws, i - ws) : "") "$"
+  stype[depth] = t; sst[depth] = st; scmd[depth] = cmd; sdq[depth] = dq
+  inw = 0; raw = ""; dq = 0; cmd = 1; st = ""
+}
+function pop() {
+  word_end(i)
+  raw = sraw[depth]; st = sst[depth]; cmd = scmd[depth]; dq = sdq[depth]
+  depth--; inw = 1; ws = i + 1
+}
+function word(v,   b, k, pp) {
+  if (hdnext) { hdnext = 0; hdp = v; sub(/^-/, "", hdp); return }
+  if (skip) { skip = 0; return }
+  if (cmd) {
+    b = v; if (index(v, "/")) { k = split(v, pp, "/"); b = pp[k] }
+    if (v ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return
+    if (b ~ /^(sudo|env|exec|nohup|time|timeout|command|builtin|nice|xargs|then|do|else|elif|if|while|until|!|\{|\})$/) { wrap = 1; return }
+    if (wrap && v ~ /^[-0-9]/) return
+    cmd = 0; wrap = 0
+    if (b ~ /^(ba|z|da|k)?sh$/) { st = "sh"; dd = 0 }
+    else if (v == "source" || v == ".") st = "src"
+    else if (v == "cd") { st = "cd"; cdb = cur }
+    else if (v == "git") { st = "git"; gb = cur; gn = 0; gC = 0; gc = 0 }
+    else { st = ""; if (index(v, "/")) ref("X", v) }
+    return
+  }
+  if (st == "sh") {
+    if (!dd && v == "--") { dd = 1; return }
+    if (!dd && v ~ /^[-+]/) {
+      if (v ~ /^[-+][oO]$/ || v == "--rcfile" || v == "--init-file") skip = 1
+      else if (v ~ /^-[a-zA-Z]*[cs]/) st = ""
+      return
+    }
+    ref("S", v); st = ""
+  } else if (st == "src") {
+    ref("S", v); st = ""
+  } else if (st == "cd") {
+    if (v !~ /^-/) { long(); target(v); cur = compose(cdb, v); target(cur) }
+  } else if (st == "git") {
+    if (gC) { gC = 0; long(); target(v); gb = compose(gb, v); gt[++gn] = gb; return }
+    if (gc) { gc = 0; return }
+    if (v == "-C") { gC = 1; return }
+    if (v == "-c") { gc = 1; return }
+    if (v ~ /^-/) return
+    if (v == "commit") { commit = 1; for (k = 1; k <= gn; k++) target(gt[k]) }
+    st = ""
+  }
+}
+FNR == 1 {
+  cur = ""; dq = 0; sq = 0; depth = 0; inw = 0; raw = ""; hd = ""; hdp = ""
+  hdnext = 0; cmd = 1; st = ""; skip = 0; wrap = 0
+}
+{
+  i = 1; cont = 0; body = 0; total = length($0)
+  if (hd != "") {
+    t = $0; sub(/^\t+/, "", t)
+    if (t == hd) { hd = ""; next }
+    if (mode == "cmd") next
+    body = 1
+  }
+  # Lex the line in chunks of cap characters: awk's substr costs the length
+  # of its string, so per-character substr on a whole long line is quadratic.
+  for (off = 1; off == 1 || off <= total; off += cap) {
+  L = substr($0, off, cap); n = length(L)
+  if (inw) ws = 1
+  while (i <= n) {
+    c = substr(L, i, 1)
+    if (sq) {
+      if (c == "'") { sq = 0; i++ }
+      else if (match(substr(L, i, 64), /^[^']+/)) i += RLENGTH
       continue
+    }
+    if (dq) {
+      if (c == "\"") dq = 0
+      else if (c == "\\") i++
+      else if (c == "$" && substr(L, i + 1, 1) == "(") { push("p"); i++ }
+      else if (c == "`") { if (depth && stype[depth] == "b") pop(); else push("b") }
+      else if (match(substr(L, i, 64), /^[^"\\$`]+/)) { i += RLENGTH; continue }
+      i++; continue
+    }
+    if (c == " " || c == "\t") { word_end(i); i++; continue }
+    if (!inw && c == "#") break
+    if (c == "&" && substr(L, i + 1, 1) == ">") { word_end(i); skip = 1; i += 2; continue }
+    if (c == ";" || c == "&" || c == "|" || c == "(") { sep(); i++; continue }
+    if (c == ")") { if (depth && stype[depth] == "p") pop(); else sep(); i++; continue }
+    if (c == "<" || c == ">") {
+      word_end(i)
+      if (c substr(L, i + 1, 1) substr(L, i + 2, 1) == "<<<") { skip = 1; i += 3; continue }
+      if (c substr(L, i + 1, 1) == "<<") { hdnext = 1; i += 2; continue }
+      skip = 1; i++
+      if (substr(L, i, 1) ~ /[>&|]/) i++
+      continue
+    }
+    if (c == "`") { if (depth && stype[depth] == "b") pop(); else push("b"); i++; continue }
+    if (!inw) { inw = 1; ws = i; raw = "" }
+    if (c == "\\") { if (off + i - 1 == total) cont = 1; i += 2; continue }
+    if (c == "'") sq = 1
+    else if (c == "\"") dq = 1
+    else if (c == "$" && substr(L, i + 1, 1) == "(") { push("p"); i++ }
+    else if (match(substr(L, i, 64), /^[^ \t;&|()<>"'\\`$#]+/)) { i += RLENGTH; continue }
+    i++
+  }
+  if (off + n <= total && inw && length(raw) <= cap) raw = raw substr(L, ws)
+  i -= n
+  }
+  i = n + 1
+  if (body) { sq = 0; dq = 0 }
+  if (sq || dq) {
+    if (inw && length(raw) <= cap) raw = raw substr(L, ws) "\n"
+  } else if (cont) {
+    if (inw && length(raw) <= cap) raw = raw substr(L, ws, n - ws)
+  } else sep()
+  if (hdp != "") { hd = hdp; hdp = "" }
+}
+END { if (commit) print "G" }
+AWK
+lex() {
+  LC_ALL=C awk -v mode="$1" -v cap="$LINE_MAX" -v tcap="$SCRIPT_MAX_FILES" "$LEX" "${@:2}"
+}
+
+# Block a command whose scripts cannot be read in full and in time ($1 says
+# why): a partial or timed-out read would let a commit through unscanned.
+block_script() {
+  {
+    echo ""
+    echo "============ COMMAND BLOCKED: SCRIPT CANNOT BE SCANNED ============"
+    echo "The commit secret scan cannot read a script this command runs: $1."
+    echo "The command was NOT run. Run scripts by a literal path to a file"
+    echo "that already exists (create it in an earlier command), keep them"
+    echo "under $SCRIPT_MAX_FILES files and 2 MiB, or commit in a command of its own."
+    echo "==================================================================="
+  } >&2
+  exit 2
+}
+check_lex() {
+  case "$NL$1$NL" in
+    *"${NL}LONG${NL}"*) block_script "a path or cd / -C target is over $LINE_MAX characters" ;;
+    *"${NL}MANY${NL}"*) block_script "more than $SCRIPT_MAX_FILES script files or targets" ;;
+  esac
+}
+
+# Resolve each script against the directory earlier cds lead to and the cwd.
+# An S word must be a readable file; an X word counts when it is an
+# executable text file (no NUL in its first 8 KiB).
+SCRIPT_FILES=()
+SCRIPTS=""
+STARTS="$PWD"
+REFS="$(printf '%s\n' "$CMD" | lex cmd)"
+check_lex "$REFS"
+while IFS=$'\t' read -r tag kind from word; do
+  [[ $tag == R ]] || continue
+  case "$word" in
+    '$HOME/'*) word="$HOME/${word#\$HOME/}" ;;
+    '${HOME}/'*) word="$HOME/${word#\$\{HOME\}/}" ;;
+  esac
+  start="$PWD"
+  [[ $from == . ]] || { resolve_dir "$from" "$PWD"; start="$RESOLVED"; }
+  found=0
+  for dir in "$start" "$PWD"; do
+    resolve_dir "$word" "$dir"
+    file="$RESOLVED"
+    [[ -f $file && -r $file ]] || continue
+    if [[ $kind == X ]]; then
+      [[ -x $file ]] && head -c 8192 "$file" | LC_ALL=C grep -Iq '' || continue
     fi
-    # Drop the boundary character grep kept in front of the token. A token
-    # starts with a word character, `.`, `/`, `~`, or a quote; any other first
-    # character is the boundary (or sits in an interpreter's path prefix,
-    # which is discarded anyway).
-    case "${tok:0:1}" in
-      [a-zA-Z0-9_./~\"\'-]) ;;
-      *) tok="${tok:1}" ;;
-    esac
-    if [[ $tok =~ $HEAD_RE ]]; then
-      HEAD="${BASH_REMATCH[1]}"
-      ARGS="${BASH_REMATCH[${#BASH_REMATCH[@]} - 1]}"
-      BARE=0
-    else
-      HEAD=""
-      ARGS=" $tok"
-      BARE=1
-    fi
-    LAST_WORD=""
-    while [[ $ARGS =~ $SARG_RE ]]; do
-      LAST_WORD="${BASH_REMATCH[1]}"
-      ARGS="${ARGS:${#BASH_REMATCH[0]}}"
-      CMD_WORDS=$(( CMD_WORDS + 1 ))
-      if [[ $CMD_WORDS -gt $WORD_CAP ]]; then
-        SCRIPT_UNREAD=1
-        break 2
-      fi
-      [[ $HEAD == cd ]] && continue
-      resolve_dir "$LAST_WORD" "$PWD"
-      add_script "$RESOLVED" "$CUR" "$BARE"
-      if [[ $CUR != "$PWD" ]]; then
-        resolve_dir "$LAST_WORD" "$CUR"
-        add_script "$RESOLVED" "$CUR" "$BARE"
-      fi
-    done
-    if [[ $HEAD == cd && -n $LAST_WORD ]]; then
-      resolve_dir "$LAST_WORD" "$CUR"
-      CUR="$RESOLVED"
-    fi
-  done < <(LC_ALL=C grep -aoE "$LEAD$CMD_TOK" <<< "$CMD" 2>/dev/null \
-    | awk -v cap="$LINE_CAP" 'length($0) > cap { print "L"; next } { print }')
+    found=1
+    add_to SCRIPTS "$file" && SCRIPT_FILES[${#SCRIPT_FILES[@]}]="$file"
+    add_to STARTS "$start"
+  done
+  if [[ $kind == S && $found == 0 ]]; then
+    block_script "\`$word\` is missing, unreadable, or not a literal path"
+  fi
+done <<< "$REFS"
+
+# Read every script in one lexer pass, after one size check.
+SCRIPT_TARGETS=""
+SCRIPT_COMMIT=0
+if [[ ${#SCRIPT_FILES[@]} -gt 0 ]]; then
+  if [[ ${#SCRIPT_FILES[@]} -gt $SCRIPT_MAX_FILES ]]; then
+    block_script "more than $SCRIPT_MAX_FILES script files"
+  fi
+  BYTES="$(wc -c "${SCRIPT_FILES[@]}" 2>/dev/null \
+    | awk -v n="${#SCRIPT_FILES[@]}" 'NR <= n { s += $1 } END { print s + 0 }')"
+  if [[ $BYTES -gt $SCRIPT_MAX_BYTES ]]; then
+    block_script "the scripts hold $BYTES bytes, over the 2 MiB limit"
+  fi
+  SCRIPT_TARGETS="$(lex script "${SCRIPT_FILES[@]}")"
+  check_lex "$SCRIPT_TARGETS"
+  [[ "$NL$SCRIPT_TARGETS$NL" == *"${NL}G${NL}"* ]] && SCRIPT_COMMIT=1
 fi
 
-# Pull each script's cd and git commit lines. A line starting with `S` heads
-# each script's block (a token never starts with a capital letter). A script
-# over SCRIPT_MAX_BYTES is not read: the command then counts as a commit, so
-# the cwd and every repo the command names are scanned (fail closed).
-SCRIPT_TOKENS=""
-while IFS=$'\t' read -r from file; do
-  [[ -n $file ]] || continue
-  size="$(wc -c < "$file" 2>/dev/null)"
-  size="${size//[[:space:]]/}"
-  if [[ -z $size ]] || (( size > SCRIPT_MAX_BYTES )); then
-    SCRIPT_UNREAD=1
-    continue
-  fi
-  TOKS="$(LC_ALL=C grep -aoE "$LEAD($CD_TOK|$GIT_TOK)" "$file" 2>/dev/null \
-    | awk -v cap="$LINE_CAP" "$LIMIT_TOKENS")"
-  SCRIPT_TOKENS="$SCRIPT_TOKENS${NL}S$from${NL}$TOKS"
-  if [[ "$NL$TOKS" =~ $NL[^a-zA-Z0-9_.$NL-]?git[[:blank:]] ]]; then
-    SCRIPT_COMMIT=1
-  fi
-  if [[ "$NL$TOKS$NL" == *"${NL}L${NL}"* ]]; then
-    SCRIPT_UNREAD=1
-  fi
-done <<< "$SCRIPTS"
-
-# Scripts past the first MAX_SCAN are checked in one grep pass for a commit
-# line. If any of them commits, or they hold more than MAX_SCAN files' worth
-# of bytes in all (too much to read in time; one of them may commit), the
-# command is too much to scan. Sizes come from one `wc -c`, before any read.
-OVERFLOW_HIT=0
-if [[ ${#OVERFLOW[@]} -gt 0 ]]; then
-  OVERFLOW_FILES=()
-  while IFS= read -r file; do
-    [[ -n $file ]] && OVERFLOW_FILES[${#OVERFLOW_FILES[@]}]="$file"
-  done < <(printf '%s\n' "${OVERFLOW[@]}" | sort -u)
-  OVERFLOW_BYTES="$(wc -c "${OVERFLOW_FILES[@]}" 2>/dev/null \
-    | awk -v n="${#OVERFLOW_FILES[@]}" 'NR <= n { s += $1 } END { print s + 0 }')"
-  if [[ $OVERFLOW_BYTES -gt $(( MAX_SCAN * SCRIPT_MAX_BYTES )) ]] \
-    || LC_ALL=C grep -aqE "$LEAD$GIT_TOK" "${OVERFLOW_FILES[@]}" 2>/dev/null; then
-    OVERFLOW_HIT=1
-  fi
-fi
-
-# Only act on a commit: in the command, in a script it runs, or possibly in a
-# script too large to read.
-if ! [[ $CMD =~ $COMMIT_RE ]] && [[ $SCRIPT_COMMIT == 0 && $SCRIPT_UNREAD == 0 && $OVERFLOW_HIT == 0 ]]; then
+# Only act on a commit, in the command or in a script it runs.
+if ! [[ $CMD =~ $COMMIT_RE ]] && [[ $SCRIPT_COMMIT == 0 ]]; then
   exit 0
-fi
-if [[ $OVERFLOW_HIT == 1 ]]; then
-  too_many "script files"
 fi
 
 # Every `cd` in the command, each argument word resolved two ways: against the
@@ -342,41 +378,17 @@ while [[ $REST =~ $CD_RE ]]; do
   REST="$ARGS"
 done
 
-# Each script's cds, walked from the directory the script runs in. Only
-# directories that exist become candidates. Its git commit lines are deduped
-# and resolved after every base is known, like the command's below.
-SCRIPT_GITS=""
-while IFS= read -r tok; do
-  case "$tok" in
-    ""|L) continue ;;
-    S*) SCUR="${tok:1}"; continue ;;
-  esac
-  tok="${tok#[!cg]}"
-  if [[ $tok == git* ]]; then
-    if add_to SCRIPT_GITS "$tok"; then
-      bump COMMIT_COUNT "git commit occurrences"
+# The scripts' cd and git -C targets, each resolved against the cwd and every
+# directory a script runs from. Only directories that exist are candidates.
+while IFS=$'\t' read -r tag path; do
+  [[ $tag == T ]] || continue
+  while IFS= read -r dir; do
+    resolve_dir "$path" "$dir"
+    if [[ -d $RESOLVED ]]; then
+      add_cand "$RESOLVED"
     fi
-    continue
-  fi
-  ARGS="${tok:2}"
-  LAST_WORD=""
-  while [[ $ARGS =~ $SARG_RE ]]; do
-    bump SCRIPT_CD_WORDS "cd arguments in script files" "$WORD_CAP"
-    LAST_WORD="${BASH_REMATCH[1]}"
-    ARGS="${ARGS:${#BASH_REMATCH[0]}}"
-    for base in "$PWD" "$SCUR"; do
-      resolve_dir "$LAST_WORD" "$base"
-      if [[ -d $RESOLVED ]]; then
-        add_cand "$RESOLVED"
-        add_to BASES "$RESOLVED" || true
-      fi
-    done
-  done
-  if [[ -n $LAST_WORD ]]; then
-    resolve_dir "$LAST_WORD" "$SCUR"
-    SCUR="$RESOLVED"
-  fi
-done <<< "$SCRIPT_TOKENS"
+  done <<< "$STARTS"
+done <<< "$SCRIPT_TARGETS"
 
 # Every `git ... commit` occurrence, not just the first, so a decoy commit
 # cannot hide the real one. Each `-C` resolves against every base (chained
@@ -407,31 +419,6 @@ while [[ $REST =~ $FIND_RE ]]; do
   done
   REST="$NEXT"
 done
-
-# The scripts' unique git commit lines, each `-C` resolved the same way but
-# kept only when the directory exists.
-while IFS= read -r tok; do
-  [[ -n $tok ]] || continue
-  OPTS="${tok#git}"
-  DIRS="$BASES"
-  while [[ $OPTS =~ $OPT_RE ]]; do
-    bump OPT_WORDS "git -C / -c options"
-    OPTS="${OPTS:${#BASH_REMATCH[0]}}"
-    if [[ "${BASH_REMATCH[1]}" == "C" ]]; then
-      OPT_WORD="${BASH_REMATCH[2]}"
-      NEW_DIRS=""
-      while IFS= read -r base; do
-        [[ -n $base ]] || continue
-        resolve_dir "$OPT_WORD" "$base"
-        if [[ -d $RESOLVED ]]; then
-          add_cand "$RESOLVED"
-          NEW_DIRS="$NEW_DIRS$NL$RESOLVED"
-        fi
-      done <<< "$DIRS$NL$PWD"
-      DIRS="${NEW_DIRS#"$NL"}"
-    fi
-  done
-done <<< "$SCRIPT_GITS"
 
 # Keep candidates that are inside a git work tree, deduped by top level.
 REPOS=""

@@ -255,3 +255,76 @@ bash commit.sh alone (secret in B)           /bin/bash                exit=2 0.0
 ```
 
 Before the fix, case 1 took 43.87 s on bash 5.3. Its `/bin/bash` 3.2 run had not finished after 15 minutes and was stopped.
+
+## Rescope (review round 2, after ab2cc08)
+
+The cap-by-cap fixes kept leaking: a per-word bash loop stayed quadratic below every cap (13.64 s repro), an oversize executable and an over-long token line were skipped silently, and every argument after `bash` was taken as a script. The script section was rewritten around one awk lexer: scripts are found at command position only, all of them are lexed in one linear pass, and every limit blocks outright. `full/scan-commit.sh`: 556 lines at `ab2cc08`, 543 after.
+
+| Scenario | Before (`ab2cc08`) | After |
+| --- | --- | --- |
+| `lite-fresh` | 12 passed, 0 failed | 12 passed, 0 failed |
+| `full-fresh` | 15 passed, 0 failed | 15 passed, 0 failed |
+| `lite-idempotent` | 4 passed, 0 failed | 4 passed, 0 failed |
+| `full-idempotent` | 5 passed, 0 failed | 5 passed, 0 failed |
+| `lite-roundtrip` | 10 passed, 0 failed | 10 passed, 0 failed |
+| `full-roundtrip` | 11 passed, 0 failed | 11 passed, 0 failed |
+| `merge-existing` | 14 passed, 0 failed | 14 passed, 0 failed |
+| `legacy-deny-migration` | 7 passed, 0 failed | 7 passed, 0 failed |
+| `scan-commit` | 8 passed, 0 failed | 8 passed, 0 failed |
+| `scan-commit-cargo-lock` | 15 passed, 0 failed | 15 passed, 0 failed |
+| `scan-commit-target-repo` | 34 passed, 0 failed | 34 passed, 0 failed |
+| `scan-commit-script-file` | 46 passed, 0 failed | 67 passed, 0 failed |
+| `push-hook` | 13 passed, 0 failed | 13 passed, 0 failed |
+| `schema-remediation` | 4 passed, 0 failed | 4 passed, 0 failed |
+| `bip39-scan` | 16 passed, 0 failed | 16 passed, 0 failed |
+| `wallet-key-regex` | 9 passed, 0 failed | 9 passed, 0 failed |
+| `scan-secrets-hash-context` | 37 passed, 0 failed | 37 passed, 0 failed |
+
+Total before: 17 scenarios, 260 passed, 0 failed. After: 17 scenarios, 281 passed, 0 failed. The four scan-commit scenarios (8 / 15 / 34 / 67 passed, 0 failed) also pass with `/bin/bash` 3.2.57, with mawk 1.3.4 and gawk 5.4.1 as `awk`, and in `ubuntu:24.04` (mawk 1.3.4, GNU grep 3.11, bash 5.2.21).
+
+Negative control, the final scenario against the `ab2cc08` hook:
+
+```
+  FAIL: script over the 2 MiB budget (blocked) — expected '2', got '0'
+  FAIL: git add <40 scripts>, the 40th commits but does not run (allowed) — expected '0', got '2'
+  FAIL: git add <66 scripts of 255 KB> (allowed, nothing runs) — expected '0', got '2'
+  FAIL: 9 scripts of 255 KB run (blocked: over 2 MiB) — expected '2', got '0'
+  FAIL: command with 1100 path words, secret in cwd, no commit (allowed) — expected '0', got '2'
+  FAIL: 32x32 quoted cd words named, secret in cwd (blocked) took 14s (limit 2s)
+  FAIL: 32x16 quoted cd words run (2 MB), secret in cwd (blocked) took 7s (limit 2s)
+  FAIL: 32x32 quoted cd words run (4 MB, over budget) (blocked) took 14s (limit 2s)
+  FAIL: #! executable over 2 MiB run by path (blocked) — expected '2', got '0'
+  FAIL: text executable over 2 MiB run by path (blocked) — expected '2', got '0'
+  FAIL: script git -C <repoB> beside a 5000-char option (blocked) — expected '2', got '0'
+  FAIL: bash <5000-char script path> (blocked) — expected '2', got '0'
+  FAIL: bash <script> <commit script as an argument> (allowed) — expected '0', got '2'
+  FAIL: bash -c <string> (no script file, allowed) — expected '0', got '2'
+  FAIL: bash <missing script> (blocked) — expected '2', got '0'
+  FAIL: bash <variable script path> (blocked) — expected '2', got '0'
+Results: 51 passed, 16 failed
+```
+
+Timing, final hook (bash 5.3 then `/bin/bash` 3.2):
+
+```
+reviewer repro: git commit; : <32 scripts>           /opt/homebrew/bin/bash exit=2  0.07s
+reviewer repro: git commit; : <32 scripts>           /bin/bash              exit=2  0.07s
+32 x 16 lines run (2 MB, quote-heavy)                /opt/homebrew/bin/bash exit=2  0.92s
+32 x 16 lines run (2 MB, quote-heavy)                /bin/bash              exit=2  0.94s
+255 KB quoted cd word                                /opt/homebrew/bin/bash exit=2  0.15s
+255 KB quoted cd word                                /bin/bash              exit=2  0.15s
+2 MB plain-text script                               /opt/homebrew/bin/bash exit=2  0.17s
+2 MB plain-text script                               /bin/bash              exit=2  0.16s
+2 MB of short cd lines and separators                /opt/homebrew/bin/bash exit=2  0.05s
+2 MB of short cd lines and separators                /bin/bash              exit=2  0.04s
+2 MB of git -C commit lines (50 targets)             /opt/homebrew/bin/bash exit=2  0.38s
+2 MB of git -C commit lines (50 targets)             /bin/bash              exit=2  0.40s
+2 MB single line of short words                      /opt/homebrew/bin/bash exit=2  0.42s
+2 MB single line of short words                      /bin/bash              exit=2  0.46s
+2 MB single line of quoted words                     /opt/homebrew/bin/bash exit=2  0.87s
+2 MB single line of quoted words                     /bin/bash              exit=2  0.89s
+1 MB single-line command, no script                  /opt/homebrew/bin/bash exit=0  0.27s
+1 MB single-line command, no script                  /bin/bash              exit=0  0.33s
+plain non-commit command                             /opt/homebrew/bin/bash exit=0  0.04s
+plain non-commit command                             /bin/bash              exit=0  0.03s
+```
