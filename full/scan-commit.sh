@@ -129,12 +129,11 @@ add_cand() {
 # directories is not blocked. Scripts the scripts run are not followed.
 # WORD_CAP bounds the per-word work: past it, the command walk stops and the
 # command counts as a commit (cwd scanned), and script cd words block.
-SCRIPT_BUDGET=262144
+SCRIPT_MAX_BYTES=262144
 WORD_CAP=1024
 CMD_WORDS=0
 SCRIPT_CD_WORDS=0
 SCRIPT_COUNT=0
-SCRIPT_BYTES=0
 SCRIPT_UNREAD=0
 SCRIPT_COMMIT=0
 SCRIPTS=""
@@ -202,19 +201,20 @@ fi
 
 # Pull each script's cd and git commit lines. A line starting with `S` heads
 # each script's block (a token never starts with a capital letter). A script
-# over the byte budget is not read: the command then counts as a commit, so
+# over SCRIPT_MAX_BYTES is not read: the command then counts as a commit, so
 # the cwd and every repo the command names are scanned (fail closed).
 SCRIPT_TOKENS=""
 while IFS=$'\t' read -r from file; do
   [[ -n $file ]] || continue
   size="$(wc -c < "$file" 2>/dev/null)"
   size="${size//[[:space:]]/}"
-  if [[ -z $size ]] || (( SCRIPT_BYTES + size > SCRIPT_BUDGET )); then
+  if [[ -z $size ]] || (( size > SCRIPT_MAX_BYTES )); then
     SCRIPT_UNREAD=1
     continue
   fi
-  SCRIPT_BYTES=$(( SCRIPT_BYTES + size ))
-  TOKS="$(LC_ALL=C grep -aoE "$LEAD($CD_TOK|$GIT_TOK)" "$file" 2>/dev/null)"
+  # Repeated git commit lines are dropped here, so a file of them stays cheap.
+  TOKS="$(LC_ALL=C grep -aoE "$LEAD($CD_TOK|$GIT_TOK)" "$file" 2>/dev/null \
+    | awk '{ t = $0; sub(/^[^cg]/, "", t) } t ~ /^git/ && seen[t]++ { next } { print }')"
   SCRIPT_TOKENS="$SCRIPT_TOKENS${NL}S$from${NL}$TOKS"
   if [[ "$NL$TOKS" =~ $NL[^a-zA-Z0-9_.$NL-]?git[[:blank:]] ]]; then
     SCRIPT_COMMIT=1

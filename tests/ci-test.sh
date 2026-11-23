@@ -854,6 +854,12 @@ git -C repoB commit -m wip"
   fresh_repo "$A" dirty
   run_cmd "bash $BIG_SH" "$A" "2" "script over the size cap: cwd still scanned (blocked)"
   fresh_repo "$A" clean
+  # The cap is per file: a filler script just under it does not use up a
+  # budget that would leave the commit script unread.
+  FILL_SH="$S/filler.sh"
+  script "$FILL_SH" "echo hi"
+  head -c 262000 /dev/zero | tr '\0' '#' >> "$FILL_SH"
+  run_cmd "bash $FILL_SH; bash $COMMIT_SH" "$A" "2" "filler script just under the cap, then the commit script (blocked)"
 
   # Many cd commands into the same few directories stay under the cap.
   MANY=""

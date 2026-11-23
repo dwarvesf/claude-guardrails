@@ -2,7 +2,7 @@
 
 Change: `lite/scan-commit.sh` and `full/scan-commit.sh` (byte-identical) find every script file a Bash command runs (`bash|sh|zsh|dash|ksh [opts] <file>`, also by path; `source <file>`; `. <file>`; `./file` or any path to an executable text file). Each one is read, never run, and its `cd` and `git commit` lines join the existing checks. A script that commits makes the command a commit; its existing `cd` directories and `git -C` targets become candidates. A script with no commit triggers nothing.
 
-**Fail closed:** a script over the 256 KiB byte budget, or a command with more than 1024 words in its `cd` and script tokens, is not fully read, so the command counts as a commit and the cwd plus every repo the command names are scanned. **Caps** (exit 2): more than 32 candidate directories across command and scripts (script directories count only when they exist), 32 script files, 32 unique `git commit` lines, or 1024 `cd` words in scripts.
+**Fail closed:** a script over 256 KiB (a per-file cap; a shared budget let a filler script leave the commit script unread), or a command with more than 1024 words in its `cd` and script tokens, is not fully read, so the command counts as a commit and the cwd plus every repo the command names are scanned. **Caps** (exit 2): more than 32 candidate directories across command and scripts (script directories count only when they exist), 32 script files, 32 unique `git commit` lines, or 1024 `cd` words in scripts.
 
 Base: `645d67a`. Host: macOS, bash 5.3 (default `bash`) and bash 3.2.57 (`/bin/bash`), BSD grep. Ubuntu 24.04 container: bash 5.2.21, GNU grep 3.11.
 
@@ -23,16 +23,16 @@ Every scenario in `tests/ci-test.sh`, before (base) and after (fixed tree).
 | `scan-commit` | 8 passed, 0 failed | 8 passed, 0 failed |
 | `scan-commit-cargo-lock` | 15 passed, 0 failed | 15 passed, 0 failed |
 | `scan-commit-target-repo` | 34 passed, 0 failed | 34 passed, 0 failed |
-| `scan-commit-script-file` | (new) | 32 passed, 0 failed |
+| `scan-commit-script-file` | (new) | 33 passed, 0 failed |
 | `push-hook` | 13 passed, 0 failed | 13 passed, 0 failed |
 | `schema-remediation` | 4 passed, 0 failed | 4 passed, 0 failed |
 | `bip39-scan` | 16 passed, 0 failed | 16 passed, 0 failed |
 | `wallet-key-regex` | 9 passed, 0 failed | 9 passed, 0 failed |
 | `scan-secrets-hash-context` | 37 passed, 0 failed | 37 passed, 0 failed |
-| `scan-commit`, `scan-commit-cargo-lock`, `scan-commit-target-repo`, `scan-commit-script-file` with `/bin/bash` 3.2.57 | | 8 / 15 / 34 / 32 passed, 0 failed |
-| same four in `ubuntu:24.04` (GNU grep 3.11, bash 5.2.21) | | 8 / 15 / 34 / 32 passed, 0 failed |
+| `scan-commit`, `scan-commit-cargo-lock`, `scan-commit-target-repo`, `scan-commit-script-file` with `/bin/bash` 3.2.57 | | 8 / 15 / 34 / 33 passed, 0 failed |
+| same four in `ubuntu:24.04` (GNU grep 3.11, bash 5.2.21) | | 8 / 15 / 34 / 33 passed, 0 failed |
 
-Total before: 16 scenarios, 214 assertions. After: 17 scenarios, 246 assertions, 0 failed.
+Total before: 16 scenarios, 214 assertions. After: 17 scenarios, 247 assertions, 0 failed.
 
 New scenario output (fixed hook):
 
@@ -61,6 +61,7 @@ New scenario output (fixed hook):
   PASS: bash <non-executable file> is read (blocked) (2)
   PASS: absolute path to a binary is not read (allowed) (0)
   PASS: script over the size cap: cwd still scanned (blocked) (2)
+  PASS: filler script just under the cap, then the commit script (blocked) (2)
   PASS: script with 80 cds into 2 directories (allowed, under the cap) (0)
   PASS: script with 80 cds into 2 directories, secret in one (blocked) (2)
   PASS: 16 command cds + 17 script cds (blocked at the combined cap) (2)
@@ -69,7 +70,7 @@ New scenario output (fixed hook):
   PASS: script with 1050 cd words (blocked at the word cap) (2)
   PASS: command with 1100 path words, clean cwd (allowed) (0)
   PASS: command with 1100 path words: walk stops, cwd scanned (blocked) (2)
-Results: 32 passed, 0 failed
+Results: 33 passed, 0 failed
 ```
 
 ## NEGATIVE CONTROL
@@ -101,6 +102,7 @@ The same scenario against the base hook (`git show HEAD:full/scan-commit.sh`, co
   FAIL: bash <non-executable file> is read (blocked) — expected '2', got '0'
   PASS: absolute path to a binary is not read (allowed) (0)
   FAIL: script over the size cap: cwd still scanned (blocked) — expected '2', got '0'
+  FAIL: filler script just under the cap, then the commit script (blocked) — expected '2', got '0'
   PASS: script with 80 cds into 2 directories (allowed, under the cap) (0)
   FAIL: script with 80 cds into 2 directories, secret in one (blocked) — expected '2', got '0'
   FAIL: 16 command cds + 17 script cds (blocked at the combined cap) — expected '2', got '0'
@@ -109,7 +111,7 @@ The same scenario against the base hook (`git show HEAD:full/scan-commit.sh`, co
   FAIL: script with 1050 cd words (blocked at the word cap) — expected '2', got '0'
   PASS: command with 1100 path words, clean cwd (allowed) (0)
   FAIL: command with 1100 path words: walk stops, cwd scanned (blocked) — expected '2', got '0'
-Results: 8 passed, 24 failed
+Results: 8 passed, 25 failed
 ```
 
 ## Timing against the 10 s hook timeout
@@ -124,6 +126,10 @@ Crafted scripts near the byte budget, hook run directly (`exit` is the hook's):
 | 6000 25-word `cd` lines, with the word cap | 0.13 s, exit 2 | 0.19 s, exit 2 |
 | 9000 `git -C /nx/rNN commit` lines (225 KB, 20 unique) | 0.27 s, exit 0 | 0.46 s, exit 0 |
 | non-commit `ls -la /tmp ./x` | 0.03 s | 0.03 s |
+| 32 scripts of 250 KB, each all `git commit` lines (per-file cap) | 1.06 s, exit 0 | 1.10 s, exit 0 |
+| `git commit -m x; ls <1000 real executables>` | 0.08 s, exit 2 (more than 32 script files) | 0.10 s, exit 2 |
+
+Budget decoy (`bash <262 KB filler>; bash commit.sh`, secret only in the commit script's repo): exit 0 with a shared 256 KiB budget (first version of this change), exit 2 with the per-file cap.
 
 Self-check: the hook on `bash tests/ci-test.sh scan-commit` with this repo as cwd (the test file has 35 `cd`s and several `git commit` strings) exits 0: it reads the file, counts the command as a commit, scans the clean cwd, and stays under the caps.
 
