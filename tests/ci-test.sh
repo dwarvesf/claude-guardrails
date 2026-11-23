@@ -737,6 +737,185 @@ test_scan_commit_target_repo() {
   finish
 }
 
+test_scan_commit_script_file() {
+  echo "=== scan-commit-script-file: hook reads the script files a command runs ==="
+  clean_claude_dir
+
+  bash "$REPO_DIR/install.sh" lite
+
+  HOOK="$CLAUDE_DIR/hooks/scan-commit/scan-commit.sh"
+  assert_file_executable "$HOOK" "scan-commit hook is executable"
+
+  # Fake 64-hex secret built at runtime so no literal lands in this source file.
+  HEX="$(printf 'ab%.0s' $(seq 32))"
+  [[ "${#HEX}" -eq 64 ]] || { echo "FATAL: fixture is not 64 chars"; exit 1; }
+
+  BASE="$HOME/script-file"
+  A="$BASE/repoA"
+  B="$BASE/repoB"
+  S="$BASE/scripts"
+  mkdir -p "$S"
+
+  # Fresh repo at "$1" with f.txt staged; "dirty" stages the secret, else clean.
+  fresh_repo() {
+    rm -rf "$1"
+    mkdir -p "$1"
+    ( cd "$1" && git init -q && git config user.email test@example.com \
+        && git config user.name "Scan Commit Test" )
+    if [[ "$2" == "dirty" ]]; then
+      printf 'token = %s\n' "$HEX" > "$1/f.txt"
+    else
+      printf 'clean\n' > "$1/f.txt"
+    fi
+    ( cd "$1" && git add f.txt )
+  }
+
+  # Run the hook on command "$1" with payload cwd "$2"; assert exit "$3".
+  run_cmd() {
+    local cmd="$1" cwd="$2" expected="$3" label="$4" input code
+    input="$(jq -n --arg cmd "$cmd" --arg cwd "$cwd" '{tool_input:{command:$cmd}, cwd:$cwd}')"
+    set +e
+    echo "$input" | "$HOOK" >/dev/null 2>&1
+    code=$?
+    set -e
+    assert_eq "$code" "$expected" "$label"
+  }
+
+  # Write script "$1" with body "$2" (a #! line first) and make it executable.
+  script() {
+    mkdir -p "$(dirname "$1")"
+    printf '#!/usr/bin/env bash\nset -e\n%s\n' "$2" > "$1"
+    chmod +x "$1"
+  }
+
+  # The commit and the cd into its repo live only in the script file; the
+  # command text names neither. The session repo (payload cwd) stays clean.
+  COMMIT_SH="$S/commit.sh"
+  script "$COMMIT_SH" "cd $B
+git add f.txt
+git commit -m wip"
+  fresh_repo "$A" clean
+  fresh_repo "$B" dirty
+  run_cmd "bash $COMMIT_SH" "$A" "2" "bash <script> that cds into a repo with a staged secret (blocked)"
+  fresh_repo "$B" clean
+  run_cmd "bash $COMMIT_SH" "$A" "0" "bash <script> that cds into a clean repo (allowed)"
+
+  # No commit in the script: its cd target is never scanned, even when both
+  # repos hold a staged secret.
+  NOCOMMIT_SH="$S/status.sh"
+  script "$NOCOMMIT_SH" "cd $B
+git add f.txt
+git status"
+  fresh_repo "$A" dirty
+  fresh_repo "$B" dirty
+  run_cmd "bash $NOCOMMIT_SH" "$A" "0" "bash <script> without a commit does not trigger a scan (allowed)"
+  fresh_repo "$A" clean
+
+  # Every way the command can run the script, secret only in repoB.
+  run_cmd "sh $COMMIT_SH" "$A" "2" "sh <script> (blocked)"
+  run_cmd "zsh $COMMIT_SH" "$A" "2" "zsh <script> (blocked)"
+  run_cmd "bash -x -e $COMMIT_SH" "$A" "2" "bash -x -e <script> (blocked)"
+  run_cmd "/bin/bash $COMMIT_SH" "$A" "2" "/bin/bash <script> (blocked)"
+  run_cmd "/usr/bin/env bash $COMMIT_SH 2>&1" "$A" "2" "/usr/bin/env bash <script> 2>&1 (blocked)"
+  run_cmd "source $COMMIT_SH" "$A" "2" "source <script> (blocked)"
+  run_cmd ". $COMMIT_SH" "$A" "2" ". <script> (blocked)"
+  run_cmd "$COMMIT_SH" "$A" "2" "<absolute path to an executable script> (blocked)"
+  run_cmd "cd $S && ./commit.sh" "$A" "2" "cd <dir> && ./<script> (blocked)"
+  run_cmd "cd $BASE && bash scripts/commit.sh" "$A" "2" "cd <dir> && bash <relative script> (blocked)"
+  run_cmd "bash ../scripts/commit.sh" "$A" "2" "bash <script relative to the cwd> (blocked)"
+  run_cmd "echo start && bash \"$COMMIT_SH\" > /tmp/log" "$A" "2" "bash \"<script>\" after another command (blocked)"
+  SP_SH="$BASE/my scripts/commit.sh"
+  script "$SP_SH" "cd $B && git commit -m wip"
+  run_cmd "bash \"$SP_SH\"" "$A" "2" "bash \"<script path with space>\" (blocked)"
+
+  # Commit shapes inside the script.
+  script "$S/dash-c.sh" "git -C $B commit -m wip"
+  run_cmd "bash $S/dash-c.sh" "$A" "2" "script with git -C <repoB> commit (blocked)"
+  script "$S/rel-cd.sh" "cd ../repoB
+git commit -m wip"
+  run_cmd "bash $S/rel-cd.sh" "$A" "2" "script with a cd relative to the cwd (blocked)"
+  script "$S/rel-c.sh" "cd $BASE
+git -C repoB commit -m wip"
+  run_cmd "bash $S/rel-c.sh" "$A" "2" "script with cd then a relative git -C (blocked)"
+
+  # A file that is not executable cannot run as ./file, so it is not read.
+  printf 'cd %s\ngit commit -m wip\n' "$B" > "$S/noexec.sh"
+  run_cmd "cd $S && ./noexec.sh" "$A" "0" "non-executable ./<file> is not read (allowed)"
+  run_cmd "bash $S/noexec.sh" "$A" "2" "bash <non-executable file> is read (blocked)"
+  # A binary on an absolute path is not read as a script.
+  run_cmd "/bin/ls $B" "$A" "0" "absolute path to a binary is not read (allowed)"
+
+  # A script over the size cap is not read, so the command counts as a commit
+  # and the cwd is scanned (fail closed, as for an unresolvable cd target).
+  BIG_SH="$S/big.sh"
+  script "$BIG_SH" "echo hi"
+  head -c 300000 /dev/zero | tr '\0' '#' >> "$BIG_SH"
+  printf '\ncd %s\ngit commit -m wip\n' "$B" >> "$BIG_SH"
+  fresh_repo "$A" dirty
+  run_cmd "bash $BIG_SH" "$A" "2" "script over the size cap: cwd still scanned (blocked)"
+  fresh_repo "$A" clean
+
+  # Many cd commands into the same few directories stay under the cap.
+  MANY=""
+  for i in $(seq 40); do
+    MANY="${MANY}cd $BASE
+cd $B
+"
+  done
+  script "$S/many-cd.sh" "${MANY}git commit -m wip"
+  fresh_repo "$B" clean
+  run_cmd "bash $S/many-cd.sh" "$A" "0" "script with 80 cds into 2 directories (allowed, under the cap)"
+  fresh_repo "$B" dirty
+  run_cmd "bash $S/many-cd.sh" "$A" "2" "script with 80 cds into 2 directories, secret in one (blocked)"
+
+  # The 32-directory cap counts command and script directories together.
+  fresh_repo "$B" clean
+  CMD_CDS=""
+  for i in $(seq 16); do
+    mkdir -p "$BASE/d$i"
+    CMD_CDS="${CMD_CDS}cd $BASE/d$i; "
+  done
+  SCRIPT_CDS=""
+  for i in $(seq 17 33); do
+    mkdir -p "$BASE/d$i"
+    SCRIPT_CDS="${SCRIPT_CDS}cd $BASE/d$i
+"
+  done
+  script "$S/cap.sh" "${SCRIPT_CDS}git commit -m wip"
+  run_cmd "${CMD_CDS}bash $S/cap.sh" "$A" "2" "16 command cds + 17 script cds (blocked at the combined cap)"
+  run_cmd "cd $BASE/d1; bash $S/cap.sh" "$A" "0" "1 command cd + 17 script cds (allowed, under the cap)"
+
+  # More than 32 script files in one command block like the other caps.
+  SCRIPTS33=""
+  for i in $(seq 33); do
+    script "$S/n$i.sh" "echo $i"
+    SCRIPTS33="${SCRIPTS33}bash $S/n$i.sh; "
+  done
+  run_cmd "${SCRIPTS33}git commit -m x" "$A" "2" "33 script files in one command (blocked at the cap)"
+
+  # Word caps keep a crafted file or command inside the hook's time limit (a
+  # timed-out hook lets the commit through). Over 1024 cd words in scripts
+  # blocks; over 1024 words in the command stops the walk and the cwd is
+  # scanned. Nothing is staged with a secret except where noted.
+  WIDE=""
+  for i in $(seq 42); do
+    WIDE="${WIDE}cd a b c d e f g h i j k l m n o p q r s t u v w x y
+"
+  done
+  script "$S/wide-cd.sh" "${WIDE}git commit -m wip"
+  run_cmd "bash $S/wide-cd.sh" "$A" "2" "script with 1050 cd words (blocked at the word cap)"
+  WORDS=""
+  for i in $(seq 1100); do
+    WORDS="$WORDS ./w$i"
+  done
+  run_cmd "echo$WORDS; bash $S/status.sh" "$A" "0" "command with 1100 path words, clean cwd (allowed)"
+  fresh_repo "$A" dirty
+  run_cmd "echo$WORDS; bash $S/status.sh" "$A" "2" "command with 1100 path words: walk stops, cwd scanned (blocked)"
+  fresh_repo "$A" clean
+
+  finish
+}
+
 test_schema_remediation() {
   echo "=== schema-remediation: Installer flags and fixes pre-v0.3.5 bad \$schema ==="
 
@@ -1141,6 +1320,7 @@ case "$SCENARIO" in
   scan-commit)       test_scan_commit ;;
   scan-commit-cargo-lock) test_scan_commit_cargo_lock ;;
   scan-commit-target-repo) test_scan_commit_target_repo ;;
+  scan-commit-script-file) test_scan_commit_script_file ;;
   push-hook)         test_push_hook ;;
   schema-remediation) test_schema_remediation ;;
   bip39-scan)        test_bip39_scan ;;
@@ -1148,7 +1328,7 @@ case "$SCENARIO" in
   scan-secrets-hash-context) test_scan_secrets_hash_context ;;
   *)
     echo "Unknown scenario: $SCENARIO"
-    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, scan-commit-target-repo, push-hook, schema-remediation, bip39-scan, wallet-key-regex, scan-secrets-hash-context"
+    echo "Available: lite-fresh, full-fresh, lite-idempotent, full-idempotent, lite-roundtrip, full-roundtrip, merge-existing, scan-commit, scan-commit-cargo-lock, scan-commit-target-repo, scan-commit-script-file, push-hook, schema-remediation, bip39-scan, wallet-key-regex, scan-secrets-hash-context"
     exit 1
     ;;
 esac

@@ -11,8 +11,8 @@
 #
 # Fail closed on the target repo: the hook does not guess which repo the
 # commit lands in. It scans the payload cwd (always) plus every repo named by
-# any `cd` or `git -C` in the command, and blocks if any of them has a staged
-# secret. A regex cannot parse shell exactly, so picking one target would let a
+# any `cd` or `git -C` in the command, or in a script file the command runs,
+# and blocks if any of them has a staged secret. A regex cannot parse shell exactly, so picking one target would let a
 # crafted command steer the scan away from the repo that holds the secret.
 set -u
 
@@ -38,9 +38,6 @@ WORD="((\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\;&|)])+)"
 # required whitespace before handles chained commands (`... && git commit ...`).
 # Global `-C <dir>` / `-c <k=v>` options may sit between `git` and `commit`.
 COMMIT_RE="(^|[^a-zA-Z0-9_-])git([[:space:]]+-[Cc][[:space:]]+$WORD)*[[:space:]]+commit([[:space:]]|\$)"
-if ! [[ $CMD =~ $COMMIT_RE ]]; then
-  exit 0
-fi
 
 # Claude Code passes cwd at the top level of the hook payload.
 CWD="$(echo "$INPUT" | jq -r '.cwd // .tool_input.cwd // empty')"
@@ -95,7 +92,7 @@ too_many() {
     echo "==================== COMMIT BLOCKED: TOO MANY DIRECTORIES TO SCAN ===================="
     echo ""
     echo "The command names too many directories to scan for staged secrets"
-    echo "within the hook's time limit (more than $MAX_SCAN $1)."
+    echo "within the hook's time limit (more than ${2:-$MAX_SCAN} $1)."
     echo ""
     echo "The commit was NOT created."
     echo ""
@@ -106,11 +103,12 @@ too_many() {
   } >&2
   exit 2
 }
-# Increment the counter named $1; block when it passes MAX_SCAN ($2 names it).
+# Increment the counter named $1; block when it passes MAX_SCAN, or $3 when
+# given ($2 names it).
 bump() {
   printf -v "$1" '%s' "$(( ${!1} + 1 ))"
-  if [[ ${!1} -gt $MAX_SCAN ]]; then
-    too_many "$2"
+  if [[ ${!1} -gt ${3:-$MAX_SCAN} ]]; then
+    too_many "$2" "${3:-}"
   fi
 }
 add_cand() {
@@ -118,6 +116,116 @@ add_cand() {
     bump CAND_COUNT "candidate directories"
   fi
 }
+
+# Script files. A commit can run inside a script the command runs, where the
+# command text shows neither `git commit` nor the repo it lands in. Each script
+# the command names is read (never run) and its `cd` and `git commit` lines
+# join the checks below. Forms: `bash|sh|zsh|dash|ksh [opts] <file>` (also by
+# path, e.g. /bin/bash), `source <file>`, `. <file>`, and `./file` or any
+# path to an executable text file. Every argument word after an interpreter is
+# tried as a file; words that are not files drop out. Script text is parsed
+# with one grep per file, linear in its size, and only its directories that
+# exist count toward the cap, so a script with many cds into a few
+# directories is not blocked. Scripts the scripts run are not followed.
+# WORD_CAP bounds the per-word work: past it, the command walk stops and the
+# command counts as a commit (cwd scanned), and script cd words block.
+SCRIPT_BUDGET=262144
+WORD_CAP=1024
+CMD_WORDS=0
+SCRIPT_CD_WORDS=0
+SCRIPT_COUNT=0
+SCRIPT_BYTES=0
+SCRIPT_UNREAD=0
+SCRIPT_COMMIT=0
+SCRIPTS=""
+# Like WORD, but also stops at a redirection or backquote (`x.sh>log`).
+SWORD="((\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]\"'\\\\;&|)<>\`])+)"
+CD_TOK="cd([[:blank:]]+$SWORD)+"
+SH_TOK="([^[:space:]\"'\\\\;&|)<>\`]*/)?(ba|z|da|k)?sh([[:blank:]]+$SWORD)+"
+SRC_TOK="(source|\\.)[[:blank:]]+$SWORD"
+PATH_TOK="(\"(\\.\\.?|~)?/[^\"]*\"|'(\\.\\.?|~)?/[^']*'|(\\.\\.?|~)?/$SWORD)"
+GIT_TOK="git([[:blank:]]+-[Cc][[:blank:]]+$WORD)*[[:blank:]]+commit([[:blank:]]|\$)"
+LEAD="(^|[^a-zA-Z0-9_.-])"
+CMD_TOK="($CD_TOK|$SH_TOK|$SRC_TOK|$PATH_TOK)"
+HEAD_RE="^(cd|source|\\.|([^[:space:]]*/)?(ba|z|da|k)?sh)([[:blank:]].*)\$"
+SARG_RE="^[[:blank:]]+$SWORD"
+
+# Queue file $1 (run from directory $2) when it is a script to read. $3 is 1
+# for the bare-path form, which counts only an executable text file.
+add_script() {
+  [[ -f $1 && -r $1 ]] || return 0
+  if [[ $3 == 1 ]]; then
+    [[ -x $1 ]] || return 0
+    LC_ALL=C grep -Iq '' "$1" 2>/dev/null || return 0
+  fi
+  if add_to SCRIPTS "$2	$1"; then
+    bump SCRIPT_COUNT "script files"
+  fi
+}
+
+# Walk the command's cd and script tokens in order, so a relative script path
+# resolves against the payload cwd and against the directory the cds lead to.
+if [[ $CMD =~ (sh|source|\.|/) ]]; then
+  CUR="$PWD"
+  while IFS= read -r tok; do
+    [[ $tok =~ ^$CMD_TOK$ ]] || tok="${tok:1}"
+    if [[ $tok =~ $HEAD_RE ]]; then
+      HEAD="${BASH_REMATCH[1]}"
+      ARGS="${BASH_REMATCH[${#BASH_REMATCH[@]} - 1]}"
+      BARE=0
+    else
+      HEAD=""
+      ARGS=" $tok"
+      BARE=1
+    fi
+    LAST_WORD=""
+    while [[ $ARGS =~ $SARG_RE ]]; do
+      LAST_WORD="${BASH_REMATCH[1]}"
+      ARGS="${ARGS:${#BASH_REMATCH[0]}}"
+      CMD_WORDS=$(( CMD_WORDS + 1 ))
+      if [[ $CMD_WORDS -gt $WORD_CAP ]]; then
+        SCRIPT_UNREAD=1
+        break 2
+      fi
+      [[ $HEAD == cd ]] && continue
+      resolve_dir "$LAST_WORD" "$PWD"
+      add_script "$RESOLVED" "$CUR" "$BARE"
+      resolve_dir "$LAST_WORD" "$CUR"
+      add_script "$RESOLVED" "$CUR" "$BARE"
+    done
+    if [[ $HEAD == cd && -n $LAST_WORD ]]; then
+      resolve_dir "$LAST_WORD" "$CUR"
+      CUR="$RESOLVED"
+    fi
+  done < <(LC_ALL=C grep -aoE "$LEAD$CMD_TOK" <<< "$CMD" 2>/dev/null)
+fi
+
+# Pull each script's cd and git commit lines. A line starting with `S` heads
+# each script's block (a token never starts with a capital letter). A script
+# over the byte budget is not read: the command then counts as a commit, so
+# the cwd and every repo the command names are scanned (fail closed).
+SCRIPT_TOKENS=""
+while IFS=$'\t' read -r from file; do
+  [[ -n $file ]] || continue
+  size="$(wc -c < "$file" 2>/dev/null)"
+  size="${size//[[:space:]]/}"
+  if [[ -z $size ]] || (( SCRIPT_BYTES + size > SCRIPT_BUDGET )); then
+    SCRIPT_UNREAD=1
+    continue
+  fi
+  SCRIPT_BYTES=$(( SCRIPT_BYTES + size ))
+  TOKS="$(LC_ALL=C grep -aoE "$LEAD($CD_TOK|$GIT_TOK)" "$file" 2>/dev/null)"
+  SCRIPT_TOKENS="$SCRIPT_TOKENS${NL}S$from${NL}$TOKS"
+  if [[ "$NL$TOKS" =~ $NL[^a-zA-Z0-9_.$NL-]?git[[:blank:]] ]]; then
+    SCRIPT_COMMIT=1
+  fi
+done <<< "$SCRIPTS"
+
+# Only act on a commit: in the command, in a script it runs, or possibly in a
+# script too large to read.
+if ! [[ $CMD =~ $COMMIT_RE ]] && [[ $SCRIPT_COMMIT == 0 && $SCRIPT_UNREAD == 0 ]]; then
+  exit 0
+fi
 
 # Every `cd` in the command, each argument word resolved two ways: against the
 # directory the previous `cd`s led to (bash's view), and raw against the
@@ -150,6 +258,42 @@ while [[ $REST =~ $CD_RE ]]; do
   REST="$ARGS"
 done
 
+# Each script's cds, walked from the directory the script runs in. Only
+# directories that exist become candidates. Its git commit lines are deduped
+# and resolved after every base is known, like the command's below.
+SCRIPT_GITS=""
+while IFS= read -r tok; do
+  case "$tok" in
+    "") continue ;;
+    S*) SCUR="${tok:1}"; continue ;;
+  esac
+  tok="${tok#[!cg]}"
+  if [[ $tok == git* ]]; then
+    if add_to SCRIPT_GITS "$tok"; then
+      bump COMMIT_COUNT "git commit occurrences"
+    fi
+    continue
+  fi
+  ARGS="${tok:2}"
+  LAST_WORD=""
+  while [[ $ARGS =~ $SARG_RE ]]; do
+    bump SCRIPT_CD_WORDS "cd arguments in script files" "$WORD_CAP"
+    LAST_WORD="${BASH_REMATCH[1]}"
+    ARGS="${ARGS:${#BASH_REMATCH[0]}}"
+    for base in "$PWD" "$SCUR"; do
+      resolve_dir "$LAST_WORD" "$base"
+      if [[ -d $RESOLVED ]]; then
+        add_cand "$RESOLVED"
+        add_to BASES "$RESOLVED" || true
+      fi
+    done
+  done
+  if [[ -n $LAST_WORD ]]; then
+    resolve_dir "$LAST_WORD" "$SCUR"
+    SCUR="$RESOLVED"
+  fi
+done <<< "$SCRIPT_TOKENS"
+
 # Every `git ... commit` occurrence, not just the first, so a decoy commit
 # cannot hide the real one. Each `-C` resolves against every base (chained
 # within one invocation, as git does) and raw against the payload cwd.
@@ -179,6 +323,31 @@ while [[ $REST =~ $FIND_RE ]]; do
   done
   REST="$NEXT"
 done
+
+# The scripts' unique git commit lines, each `-C` resolved the same way but
+# kept only when the directory exists.
+while IFS= read -r tok; do
+  [[ -n $tok ]] || continue
+  OPTS="${tok#git}"
+  DIRS="$BASES"
+  while [[ $OPTS =~ $OPT_RE ]]; do
+    bump OPT_WORDS "git -C / -c options"
+    OPTS="${OPTS:${#BASH_REMATCH[0]}}"
+    if [[ "${BASH_REMATCH[1]}" == "C" ]]; then
+      OPT_WORD="${BASH_REMATCH[2]}"
+      NEW_DIRS=""
+      while IFS= read -r base; do
+        [[ -n $base ]] || continue
+        resolve_dir "$OPT_WORD" "$base"
+        if [[ -d $RESOLVED ]]; then
+          add_cand "$RESOLVED"
+          NEW_DIRS="$NEW_DIRS$NL$RESOLVED"
+        fi
+      done <<< "$DIRS$NL$PWD"
+      DIRS="${NEW_DIRS#"$NL"}"
+    fi
+  done
+done <<< "$SCRIPT_GITS"
 
 # Keep candidates that are inside a git work tree, deduped by top level.
 REPOS=""
@@ -282,8 +451,9 @@ fi
   echo "==================== SECRET DETECTED — COMMIT BLOCKED ===================="
   echo ""
   echo "Staged changes matched secret pattern(s) in the repo(s) below. The hook"
-  echo "scans the session cwd and every repo the command names with cd or -C,"
-  echo "so a secret staged in any of them blocks this commit."
+  echo "scans the session cwd and every repo the command, or a script file it"
+  echo "runs, names with cd or -C, so a secret staged in any of them blocks"
+  echo "this commit."
   echo "$REPORT"
   echo "The commit was NOT created."
   echo ""
