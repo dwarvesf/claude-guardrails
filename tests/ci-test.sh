@@ -632,6 +632,26 @@ test_scan_commit_cargo_lock() {
   run_timed 'for (i = 0; i < 200000; i++) printf "sha256:a"; print ""' \
     "0" "1.6 MB line of sha256:a scans in <2s"
 
+  # Invalid UTF-8 under a UTF-8 locale: BSD awk used to abort on the bad byte,
+  # cutting the scan short so a key on a later line passed.
+  U8="$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1)"
+  U8="${U8:-C.UTF-8}"
+  BAD=$'bad \xff\xfe byte'
+  LANG="$U8" LC_ALL="$U8" run_case "notes.txt" "$(printf '%s\n%s' "$BAD" "$AK")" "2" "key after an invalid UTF-8 line blocked"
+  LANG="$U8" LC_ALL="$U8" run_case "notes.txt" "$(printf '%s\nclean' "$BAD")" "0" "invalid UTF-8 with clean content allowed"
+
+  # Fail closed: a scan stage that fails, or awk output without its "\002"
+  # line, blocks the commit instead of passing it.
+  STUBS="$HOME/scan-stubs"
+  mkdir -p "$STUBS/awk-fails" "$STUBS/awk-empty"
+  printf '#!/bin/sh\ncat >/dev/null\nexit 1\n' > "$STUBS/awk-fails/awk"
+  printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$STUBS/awk-empty/awk"
+  chmod +x "$STUBS/awk-fails/awk" "$STUBS/awk-empty/awk"
+  printf '{not json' > "$STUBS/bad-patterns.json"
+  PATH="$STUBS/awk-fails:$PATH" run_case "notes.txt" "clean" "2" "failing awk blocks (fail closed)"
+  PATH="$STUBS/awk-empty:$PATH" run_case "notes.txt" "clean" "2" "awk output without the separator blocks (fail closed)"
+  CLAUDE_GUARDRAILS_PATTERNS="$STUBS/bad-patterns.json" run_case "notes.txt" "clean" "2" "invalid patterns JSON blocks (fail closed)"
+
   finish
 }
 
