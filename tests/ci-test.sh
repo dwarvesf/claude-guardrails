@@ -607,6 +607,31 @@ test_scan_commit_cargo_lock() {
   run_case "notes.txt" "sha512:$HEX" "2" "64-hex after a non-sha256 marker still blocked"
   run_case "uv.lock.bak" "$HEX" "2" "64-hex in uv.lock.bak still blocked"
 
+  # Timing: a timed-out hook lets the commit through, so a long line full of
+  # sha256 markers must scan fast. Stage the file awk program "$1" prints, run
+  # the hook in its own process group (killed after 10 s), and assert it exits
+  # "$2" in under 2 s.
+  run_timed() {
+    local prog="$1" expected="$2" label="$3" out
+    rm -rf "$REPO"
+    mkdir -p "$REPO"
+    ( cd "$REPO" && git init -q && git config user.email test@example.com \
+        && git config user.name "Scan Commit Test" \
+        && awk -v h="$HEX" "BEGIN { $prog }" > big.json && git add big.json )
+    out="$(echo "$INPUT" | perl -MTime::HiRes=time -e '
+      my $t = time; my $pid = fork;
+      if (!$pid) { setpgrp; exec @ARGV }
+      local $SIG{ALRM} = sub { kill "KILL", -$pid };
+      alarm 10; waitpid $pid, 0;
+      printf "%s %d\n", ($? & 127 ? "timeout" : $? >> 8), (time - $t) * 1000' "$HOOK")"
+    echo "  ($label: exit ${out% *}, ${out#* } ms)"
+    assert_eq "${out% *} $([[ ${out#* } -lt 2000 ]] && echo fast || echo slow)" "$expected fast" "$label"
+  }
+  run_timed 'printf "["; for (i = 0; i < 30000; i++) printf "\"sha256:%s\",", h; print "0]"' \
+    "0" "2.2 MB line of 30k sha256-marked digests scans in <2s"
+  run_timed 'for (i = 0; i < 200000; i++) printf "sha256:a"; print ""' \
+    "0" "1.6 MB line of sha256:a scans in <2s"
+
   finish
 }
 

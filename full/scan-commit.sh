@@ -220,9 +220,14 @@ scan_repo() {
   # Digest exemptions for the 64-hex pattern only: after the added lines and a
   # "\002" line, awk prints a digest view of the same lines that only that
   # pattern reads. The view drops lines of lockfiles and checksum files (by
-  # basename), and masks a 64-hex run right after `sha256:`, `sha256: `,
-  # `sha256=`, `sha256-`, `sha256 "` or `sha256 '`. Every other pattern scans
-  # the full text, so a key on an exempt line or in a lockfile still blocks.
+  # basename), and sed masks the hex run right after `sha256:`, `sha256: `,
+  # `sha256=`, `sha256-`, `sha256 "` or `sha256 '` (a masked run that is not
+  # 64 long could not match the rule anyway). Every other pattern scans the
+  # full text, so a key on an exempt line or in a lockfile still blocks.
+  # The mask runs in sed because a match loop or gsub in awk is quadratic on a
+  # long line in some awks (BSD awk), and a hook that times out lets the commit
+  # through; sed is linear on the same input.
+  local sep=$'\002'
   added="$(echo "$diff" | awk '
     BEGIN {
       split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS", a, " ")
@@ -241,22 +246,13 @@ scan_repo() {
     }
     /^\+/ {
       line = substr($0, 2)
-      gsub(/\002/, "?", line)
+      if (index(line, "\002")) gsub(/\002/, "?", line)
       if (cargo && length(line) == 77 && line ~ /^checksum = "[0-9a-f]+"$/) next
       print line
-      if (skip) next
-      d = ""
-      while (match(line, /sha256(: ?|=|-| "| \047)[0-9a-fA-F]+/)) {
-        d = d substr(line, 1, RSTART - 1)
-        m = substr(line, RSTART, RLENGTH)
-        line = substr(line, RSTART + RLENGTH)
-        match(m, /[0-9a-fA-F]+$/)
-        d = d (RLENGTH == 64 ? substr(m, 1, RSTART - 1) "<sha256>" : m)
-      }
-      dv[++k] = d line
+      if (!skip) dv[++k] = line
     }
     END { print "\002"; for (i = 1; i <= k; i++) print dv[i] }
-  ')"
+  ' | sed -E "/^$sep\$/,\$s/sha256(: ?|=|-| [\"'])[0-9a-fA-F]+/<sha256>/g")"
 
   if [[ "$added" == $'\002' ]]; then
     return 0
