@@ -195,13 +195,17 @@ if [[ -z "$REPOS" ]]; then
   exit 0
 fi
 
-# Print the names of patterns matched by the staged diff of repo $1.
+# Print the names of patterns matched by the staged diff of repo $1. Return 1
+# when any stage of the scan fails, so the caller blocks instead of passing.
 scan_repo() {
   local repo="$1" diff added
   # Scan only staged changes, not the entire file. This avoids re-flagging
   # secrets that were already committed before the hook existed, and keeps
   # the scan bounded to what's about to be recorded.
-  diff="$(git -C "$repo" diff --cached --unified=0 --no-color 2>/dev/null || true)"
+  diff="$(git -C "$repo" diff --cached --unified=0 --no-color 2>/dev/null)" || {
+    echo "scan-commit: git diff failed in $repo" >&2
+    return 1
+  }
   if [[ -z "$diff" ]]; then
     return 0
   fi
@@ -227,8 +231,17 @@ scan_repo() {
   # The mask runs in sed because a match loop or gsub in awk is quadratic on a
   # long line in some awks (BSD awk), and a hook that times out lets the commit
   # through; sed is linear on the same input.
+  #
+  # awk and sed run with LC_ALL=C: under a UTF-8 locale BSD awk aborts on an
+  # invalid byte sequence and BSD sed refuses the line, which cut the scanned
+  # text short and let a key on a later line through. jq -R reads the bytes
+  # as text, and tr turns every non-ASCII byte into "?" first so jq never sees
+  # an invalid sequence (the patterns are ASCII).
+  # A failed stage, or output without the "\002" line that awk prints last
+  # (checked in jq), fails the scan. The mask uses [[:xdigit:]]: BSD sed in the
+  # C locale is several times slower on a [0-9a-fA-F] range.
   local sep=$'\002'
-  added="$(echo "$diff" | awk '
+  added="$(set -o pipefail; echo "$diff" | LC_ALL=C awk '
     BEGIN {
       split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS", a, " ")
       for (i in a) lock[a[i]] = 1
@@ -252,7 +265,11 @@ scan_repo() {
       if (!skip) dv[++k] = line
     }
     END { print "\002"; for (i = 1; i <= k; i++) print dv[i] }
-  ' | sed -E "/^$sep\$/,\$s/sha256(: ?|=|-| [\"'])[0-9a-fA-F]+/<sha256>/g")"
+  ' | LC_ALL=C sed -E "/^$sep\$/,\$s/sha256(: ?|=|-| [\"'])[[:xdigit:]]+/<sha256>/g" \
+    | LC_ALL=C tr '\200-\377' '?')" || {
+    echo "scan-commit: extracting the staged lines failed in $repo" >&2
+    return 1
+  }
 
   if [[ "$added" == $'\002' ]]; then
     return 0
@@ -264,13 +281,16 @@ scan_repo() {
   fi
 
   jq -Rsr --slurpfile pats "$PATTERNS_FILE" '
-    split("\u0002\n") as [$text, $digest] |
-    $pats[0]
+    split("\u0002\n") | if length != 2 then error("scan separator missing") else . end
+    | . as [$text, $digest] | $pats[0]
     | map(select(.r as $r
         | (if (.n | startswith("Hex private key")) then $digest else $text end)
         | test($r)))
     | map(.n) | .[]
-  ' <<< "$added"
+  ' <<< "$added" || {
+    echo "scan-commit: jq pattern scan failed in $repo" >&2
+    return 1
+  }
 }
 
 # Note: the BIP39 wordlist check lives only in scan-secrets.sh (the prompt
@@ -281,15 +301,38 @@ scan_repo() {
 # assignments, which is the realistic commit-time leak path.
 
 REPORT=""
+FAILED=""
 while IFS= read -r repo; do
-  HITS="$(scan_repo "$repo")"
+  if ! HITS="$(scan_repo "$repo")"; then
+    FAILED="$FAILED${NL}    $repo"
+    continue
+  fi
   if [[ -z "$HITS" ]]; then
     continue
   fi
   # Show which staged files contain changes so the user knows where to look.
   FILES="$(git -C "$repo" diff --cached --name-only 2>/dev/null | head -10)"
-  REPORT="$REPORT${NL}Repository: $repo${NL}  Matched pattern(s):${NL}$(echo "$HITS" | sed 's/^/    - /')${NL}  Files with staged changes:${NL}$(echo "$FILES" | sed 's/^/    /')${NL}"
+  REPORT="$REPORT${NL}Repository: $repo${NL}  Matched pattern(s):${NL}$(echo "$HITS" | LC_ALL=C sed 's/^/    - /')${NL}  Files with staged changes:${NL}$(echo "$FILES" | LC_ALL=C sed 's/^/    /')${NL}"
 done <<< "$REPOS"
+
+# Fail closed: a scan that could not finish blocks, it never passes silently.
+if [[ -n "$FAILED" ]]; then
+  {
+    echo ""
+    echo "==================== COMMIT BLOCKED: SECRET SCAN FAILED ===================="
+    echo ""
+    echo "The staged-secret scan could not finish for the repo(s) below, so the"
+    echo "hook cannot tell whether this commit is clean:$FAILED"
+    echo "$REPORT"
+    echo "The commit was NOT created."
+    echo ""
+    echo "To resolve: check that git, awk, sed and jq run in this shell and that"
+    echo "$PATTERNS_FILE is valid JSON, then commit again."
+    echo ""
+    echo "============================================================================"
+  } >&2
+  exit 2
+fi
 
 if [[ -z "$REPORT" ]]; then
   exit 0
