@@ -580,6 +580,33 @@ test_scan_commit_cargo_lock() {
   set -e
   assert_eq "$EXIT" "2" "other secret in Cargo.lock still blocked"
 
+  # A content line starting with "++ " shows in the diff as "+++ ..."; inside a
+  # hunk it is an added line, not a file header, so it is scanned.
+  AK="AKIA$(printf 'A%.0s' $(seq 16))"
+  run_case "trace.log" "++ $AK" "2" "key on a ++ content line blocked"
+  run_case "trace.log" "++ $HEX" "2" "64-hex on a ++ content line blocked"
+
+  # Digest exemptions, 64-hex pattern only: lockfiles and checksum files by
+  # basename, and a 64-hex run right after a sha256 marker.
+  for f in uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json \
+      pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock \
+      composer.lock Package.resolved SHA256SUMS dist/app.tar.gz.sha256; do
+    run_case "$f" "$HEX  app.tar.gz" "0" "64-hex in $f allowed"
+  done
+  run_case "sub/uv.lock" "$HEX" "0" "64-hex in nested uv.lock allowed"
+  for m in "sha256:$HEX" "sha256: $HEX" "sha256=$HEX" "sha256-$HEX" \
+      "sha256 \"$HEX\"" "sha256 '$HEX'"; do
+    run_case "notes.txt" "digest $m" "0" "marked digest allowed: ${m%"$HEX"*}"
+  done
+
+  # Still blocked: other patterns, unmarked digests, near-miss names.
+  run_case "uv.lock" "token = \"$AK\"" "2" "key inside uv.lock still blocked"
+  run_case "notes.txt" "sha256:$HEX $AK" "2" "key on a marked line still blocked"
+  run_case "notes.txt" "sha256:$HEX $HEX" "2" "second unmarked 64-hex on a marked line still blocked"
+  run_case "notes.txt" "digest $HEX" "2" "bare 64-hex in a normal file still blocked"
+  run_case "notes.txt" "sha512:$HEX" "2" "64-hex after a non-sha256 marker still blocked"
+  run_case "uv.lock.bak" "$HEX" "2" "64-hex in uv.lock.bak still blocked"
+
   finish
 }
 

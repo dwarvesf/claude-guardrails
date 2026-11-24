@@ -206,39 +206,59 @@ scan_repo() {
     return 0
   fi
 
-  # Extract only the added-line content (lines starting with "+"), skipping
-  # the "+++" file-header lines that otherwise leak path strings into the scan.
+  # Extract only the added-line content (lines starting with "+"). A "+++" line
+  # is a file header only between a `diff --git` line and its first `@@`; inside
+  # a hunk it is an added line whose content starts with "++ " and is scanned.
   #
-  # One narrow exemption: Cargo.lock lists a SHA-256 `checksum = "<64 hex>"` per
-  # crate, which the 64-hex rule would otherwise block on every lockfile change.
-  # A line is dropped only when BOTH hold: the file's basename is exactly
-  # `Cargo.lock` (taken from the `+++` header, honoured only between a
-  # `diff --git` line and its first `@@` so an added content line can never spoof
-  # it), AND the line matches exactly `^checksum = "[0-9a-f]{64}"$`. Everything
-  # else, including every other Cargo.lock line, is scanned as before. The 64-char
-  # check uses length() (12-char prefix + 64 + closing quote = 77) because mawk
-  # builds without regex intervals would not honour `{64}`.
+  # One narrow exemption for every pattern: Cargo.lock lists a SHA-256
+  # `checksum = "<64 hex>"` per crate. A line is dropped only when BOTH hold: the
+  # file's basename is exactly `Cargo.lock` (from the `+++` header), AND the line
+  # matches exactly `^checksum = "[0-9a-f]{64}"$`. The 64-char check uses
+  # length() (12-char prefix + 64 + closing quote = 77) because mawk builds
+  # without regex intervals would not honour `{64}`.
+  #
+  # Digest exemptions for the 64-hex pattern only: after the added lines and a
+  # "\002" line, awk prints a digest view of the same lines that only that
+  # pattern reads. The view drops lines of lockfiles and checksum files (by
+  # basename), and masks a 64-hex run right after `sha256:`, `sha256: `,
+  # `sha256=`, `sha256-`, `sha256 "` or `sha256 '`. Every other pattern scans
+  # the full text, so a key on an exempt line or in a lockfile still blocks.
   added="$(echo "$diff" | awk '
-    /^diff --git / { hdr = 1; cargo = 0; next }
-    /^@@/          { hdr = 0 }
-    /^\+\+\+ /     {
-      if (hdr) {
-        path = substr($0, 5)
-        sub(/\t.*$/, "", path)
-        gsub(/"/, "", path)
-        n = split(path, parts, "/")
-        cargo = (parts[n] == "Cargo.lock")
-      }
+    BEGIN {
+      split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS", a, " ")
+      for (i in a) lock[a[i]] = 1
+    }
+    /^diff --git /    { hdr = 1; cargo = 0; skip = 0; next }
+    /^@@/             { hdr = 0 }
+    /^\+\+\+ / && hdr {
+      path = substr($0, 5)
+      sub(/\t.*$/, "", path)
+      gsub(/"/, "", path)
+      n = split(path, parts, "/")
+      cargo = (parts[n] == "Cargo.lock")
+      skip = (parts[n] in lock) || parts[n] ~ /\.sha256$/
       next
     }
     /^\+/ {
       line = substr($0, 2)
+      gsub(/\002/, "?", line)
       if (cargo && length(line) == 77 && line ~ /^checksum = "[0-9a-f]+"$/) next
       print line
+      if (skip) next
+      d = ""
+      while (match(line, /sha256(: ?|=|-| "| \047)[0-9a-fA-F]+/)) {
+        d = d substr(line, 1, RSTART - 1)
+        m = substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+        match(m, /[0-9a-fA-F]+$/)
+        d = d (RLENGTH == 64 ? substr(m, 1, RSTART - 1) "<sha256>" : m)
+      }
+      dv[++k] = d line
     }
+    END { print "\002"; for (i = 1; i <= k; i++) print dv[i] }
   ')"
 
-  if [[ -z "$added" ]]; then
+  if [[ "$added" == $'\002' ]]; then
     return 0
   fi
 
@@ -248,9 +268,11 @@ scan_repo() {
   fi
 
   jq -Rsr --slurpfile pats "$PATTERNS_FILE" '
-    . as $text |
+    split("\u0002\n") as [$text, $digest] |
     $pats[0]
-    | map(select(.r as $r | $text | test($r)))
+    | map(select(.r as $r
+        | (if (.n | startswith("Hex private key")) then $digest else $text end)
+        | test($r)))
     | map(.n) | .[]
   ' <<< "$added"
 }
