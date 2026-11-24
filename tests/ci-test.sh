@@ -580,6 +580,58 @@ test_scan_commit_cargo_lock() {
   set -e
   assert_eq "$EXIT" "2" "other secret in Cargo.lock still blocked"
 
+  # A content line starting with "++ " shows in the diff as "+++ ..."; inside a
+  # hunk it is an added line, not a file header, so it is scanned.
+  AK="AKIA$(printf 'A%.0s' $(seq 16))"
+  run_case "trace.log" "++ $AK" "2" "key on a ++ content line blocked"
+  run_case "trace.log" "++ $HEX" "2" "64-hex on a ++ content line blocked"
+
+  # Digest exemptions, 64-hex pattern only: lockfiles and checksum files by
+  # basename, and a 64-hex run right after a sha256 marker.
+  for f in uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json \
+      pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock \
+      composer.lock Package.resolved SHA256SUMS dist/app.tar.gz.sha256; do
+    run_case "$f" "$HEX  app.tar.gz" "0" "64-hex in $f allowed"
+  done
+  run_case "sub/uv.lock" "$HEX" "0" "64-hex in nested uv.lock allowed"
+  for m in "sha256:$HEX" "sha256: $HEX" "sha256=$HEX" "sha256-$HEX" \
+      "sha256 \"$HEX\"" "sha256 '$HEX'"; do
+    run_case "notes.txt" "digest $m" "0" "marked digest allowed: ${m%"$HEX"*}"
+  done
+
+  # Still blocked: other patterns, unmarked digests, near-miss names.
+  run_case "uv.lock" "token = \"$AK\"" "2" "key inside uv.lock still blocked"
+  run_case "notes.txt" "sha256:$HEX $AK" "2" "key on a marked line still blocked"
+  run_case "notes.txt" "sha256:$HEX $HEX" "2" "second unmarked 64-hex on a marked line still blocked"
+  run_case "notes.txt" "digest $HEX" "2" "bare 64-hex in a normal file still blocked"
+  run_case "notes.txt" "sha512:$HEX" "2" "64-hex after a non-sha256 marker still blocked"
+  run_case "uv.lock.bak" "$HEX" "2" "64-hex in uv.lock.bak still blocked"
+
+  # Timing: a timed-out hook lets the commit through, so a long line full of
+  # sha256 markers must scan fast. Stage the file awk program "$1" prints, run
+  # the hook in its own process group (killed after 10 s), and assert it exits
+  # "$2" in under 2 s.
+  run_timed() {
+    local prog="$1" expected="$2" label="$3" out
+    rm -rf "$REPO"
+    mkdir -p "$REPO"
+    ( cd "$REPO" && git init -q && git config user.email test@example.com \
+        && git config user.name "Scan Commit Test" \
+        && awk -v h="$HEX" "BEGIN { $prog }" > big.json && git add big.json )
+    out="$(echo "$INPUT" | perl -MTime::HiRes=time -e '
+      my $t = time; my $pid = fork;
+      if (!$pid) { setpgrp; exec @ARGV }
+      local $SIG{ALRM} = sub { kill "KILL", -$pid };
+      alarm 10; waitpid $pid, 0;
+      printf "%s %d\n", ($? & 127 ? "timeout" : $? >> 8), (time - $t) * 1000' "$HOOK")"
+    echo "  ($label: exit ${out% *}, ${out#* } ms)"
+    assert_eq "${out% *} $([[ ${out#* } -lt 2000 ]] && echo fast || echo slow)" "$expected fast" "$label"
+  }
+  run_timed 'printf "["; for (i = 0; i < 30000; i++) printf "\"sha256:%s\",", h; print "0]"' \
+    "0" "2.2 MB line of 30k sha256-marked digests scans in <2s"
+  run_timed 'for (i = 0; i < 200000; i++) printf "sha256:a"; print ""' \
+    "0" "1.6 MB line of sha256:a scans in <2s"
+
   finish
 }
 
