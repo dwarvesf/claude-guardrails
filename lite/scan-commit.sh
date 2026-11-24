@@ -223,10 +223,12 @@ scan_repo() {
   #
   # Digest exemptions for the 64-hex pattern only: after the added lines and a
   # "\002" line, awk prints a digest view of the same lines that only that
-  # pattern reads. The view drops lines of lockfiles and checksum files (by
-  # basename), and sed masks the hex run right after `sha256:`, `sha256: `,
-  # `sha256=`, `sha256-`, `sha256 "` or `sha256 '` (a masked run that is not
-  # 64 long could not match the rule anyway). Every other pattern scans the
+  # pattern reads. The view drops lines of lockfiles, checksum files and
+  # `codex-hooks.json` (by basename; that file is a hooks manifest whose values
+  # are SHA-256 trust pins of hook scripts), and sed masks the hex run right
+  # after `sha256:`, `sha256: `, `sha256=`, `sha256-`, `sha256 "` or
+  # `sha256 '` (a masked run that is not 64 long could not match the rule
+  # anyway). Every other pattern scans the
   # full text, so a key on an exempt line or in a lockfile still blocks.
   # The mask runs in sed because a match loop or gsub in awk is quadratic on a
   # long line in some awks (BSD awk), and a hook that times out lets the commit
@@ -243,7 +245,7 @@ scan_repo() {
   local sep=$'\002'
   added="$(set -o pipefail; echo "$diff" | LC_ALL=C awk '
     BEGIN {
-      split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS", a, " ")
+      split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS codex-hooks.json", a, " ")
       for (i in a) lock[a[i]] = 1
     }
     /^diff --git /    { hdr = 1; cargo = 0; skip = 0; next }

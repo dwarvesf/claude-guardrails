@@ -607,6 +607,17 @@ test_scan_commit_cargo_lock() {
   run_case "notes.txt" "sha512:$HEX" "2" "64-hex after a non-sha256 marker still blocked"
   run_case "uv.lock.bak" "$HEX" "2" "64-hex in uv.lock.bak still blocked"
 
+  # codex-hooks.json is a hooks manifest whose values are SHA-256 trust pins of
+  # hook scripts. Exempt by exact basename for the 64-hex pattern only.
+  PIN="\"hooks/demo-hook.sh\": \"$HEX\""
+  run_case "hooks/codex-hooks.json" "$PIN" "0" "trust pin in hooks/codex-hooks.json allowed"
+  run_case "codex-hooks.json" "$PIN" "0" "trust pin in root codex-hooks.json allowed"
+  run_case "notes.json" "$PIN" "2" "same pin line in notes.json still blocked"
+  run_case "hooks/other.json" "$PIN" "2" "same pin line in hooks/other.json still blocked"
+  run_case "hooks/codex-hooks.json.bak" "$PIN" "2" "same pin line in codex-hooks.json.bak still blocked"
+  run_case "hooks/my-codex-hooks.json" "$PIN" "2" "same pin line in my-codex-hooks.json still blocked"
+  run_case "hooks/codex-hooks.json" "$PIN $AK" "2" "key inside codex-hooks.json still blocked"
+
   # Timing: a timed-out hook lets the commit through, so a long line full of
   # sha256 markers must scan fast. Stage the file awk program "$1" prints, run
   # the hook in its own process group (killed after 10 s), and assert it exits
