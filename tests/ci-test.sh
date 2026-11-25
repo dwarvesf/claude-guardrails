@@ -607,6 +607,47 @@ test_scan_commit_cargo_lock() {
   run_case "notes.txt" "sha512:$HEX" "2" "64-hex after a non-sha256 marker still blocked"
   run_case "uv.lock.bak" "$HEX" "2" "64-hex in uv.lock.bak still blocked"
 
+  # codex-hooks.json is a hooks manifest whose values are SHA-256 trust pins of
+  # hook scripts. For the 64-hex pattern only, a run is exempt when the file's
+  # basename is exactly codex-hooks.json AND the run sits in the pin shape
+  # '^<64 lowercase hex> ' (single quote, caret, run, space, single quote).
+  PIN="hash_file \"\${PLUGIN_ROOT}/hooks/demo-hook.sh\" | /usr/bin/grep -q '^$HEX ' || exit 2"
+  PIN2="$PIN; hash_file \"\${PLUGIN_ROOT}/hooks/other-hook.sh\" | /usr/bin/grep -q '^$HEX ' && true"
+  run_case "hooks/codex-hooks.json" "$PIN" "0" "pin-shaped line in hooks/codex-hooks.json allowed"
+  run_case "codex-hooks.json" "$PIN" "0" "pin-shaped line in root codex-hooks.json allowed"
+  run_case "hooks/codex-hooks.json" "$PIN2" "0" "line with two pins in codex-hooks.json allowed"
+  run_case "hooks/codex-hooks.json" "$PIN
+$PIN" "0" "two pin lines in codex-hooks.json allowed"
+
+  # Still blocked: right file, hex outside the pin shape.
+  run_case "hooks/codex-hooks.json" "\"hooks/demo-hook.sh\": \"$HEX\"" "2" "bare manifest-shaped 64-hex in codex-hooks.json still blocked"
+  run_case "hooks/codex-hooks.json" "$PIN $HEX" "2" "second bare 64-hex on a pin line still blocked"
+  run_case "hooks/codex-hooks.json" "$PIN2 \"$HEX\"" "2" "bare 64-hex after two pins still blocked"
+  run_case "hooks/codex-hooks.json" "grep -q \"^$HEX \" || exit 2" "2" "double-quoted caret run in codex-hooks.json still blocked"
+  run_case "hooks/codex-hooks.json" "grep -q '$HEX ' || exit 2" "2" "single-quoted run without caret still blocked"
+  run_case "hooks/codex-hooks.json" "grep -q '^$HEX' || exit 2" "2" "pin shape without the trailing space still blocked"
+  run_case "hooks/codex-hooks.json" "grep -q '^$HEX_UPPER ' || exit 2" "2" "uppercase pin-shaped run still blocked"
+  run_case "hooks/codex-hooks.json" "$PIN k=$AK" "2" "key on a pin line in codex-hooks.json still blocked"
+  run_case "hooks/codex-hooks.json" "$PIN
+k=$AK" "2" "key on the next line of codex-hooks.json still blocked"
+
+  # Still blocked: the same real-shape line in any other file.
+  run_case "notes.json" "$PIN" "2" "pin-shaped line in notes.json still blocked"
+  run_case "hooks/other.json" "$PIN" "2" "pin-shaped line in hooks/other.json still blocked"
+  run_case "hooks/codex-hooks.json.bak" "$PIN" "2" "pin-shaped line in codex-hooks.json.bak still blocked"
+  run_case "hooks/my-codex-hooks.json" "$PIN" "2" "pin-shaped line in my-codex-hooks.json still blocked"
+  run_case "codex-hooks.json/config.json" "$PIN" "2" "pin-shaped line under a codex-hooks.json directory still blocked"
+
+  # The 64-hex rule needs a run of exactly 64 hex characters with no hex
+  # neighbour, so a 63 or 65 character run never matches it, pin-shaped or not.
+  # Those lines pass in any file: the mask is not what lets them through.
+  HEX63="${HEX:1}"
+  HEX65="${HEX}a"
+  run_case "hooks/codex-hooks.json" "grep -q '^$HEX63 ' || exit 2" "0" "63-char pin-shaped run in codex-hooks.json not matched by the rule"
+  run_case "hooks/codex-hooks.json" "grep -q '^$HEX65 ' || exit 2" "0" "65-char pin-shaped run in codex-hooks.json not matched by the rule"
+  run_case "notes.json" "grep -q '^$HEX65 ' || exit 2" "0" "65-char run in notes.json not matched by the rule"
+  run_case "notes.json" "grep -q '^$HEX63 ' || exit 2" "0" "63-char run in notes.json not matched by the rule"
+
   # Timing: a timed-out hook lets the commit through, so a long line full of
   # sha256 markers must scan fast. Stage the file awk program "$1" prints, run
   # the hook in its own process group (killed after 10 s), and assert it exits
