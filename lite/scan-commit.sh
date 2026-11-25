@@ -223,13 +223,23 @@ scan_repo() {
   #
   # Digest exemptions for the 64-hex pattern only: after the added lines and a
   # "\002" line, awk prints a digest view of the same lines that only that
-  # pattern reads. The view drops lines of lockfiles, checksum files and
-  # `codex-hooks.json` (by basename; that file is a hooks manifest whose values
-  # are SHA-256 trust pins of hook scripts), and sed masks the hex run right
-  # after `sha256:`, `sha256: `, `sha256=`, `sha256-`, `sha256 "` or
-  # `sha256 '` (a masked run that is not 64 long could not match the rule
-  # anyway). Every other pattern scans the
+  # pattern reads. The view drops lines of lockfiles and checksum files (by
+  # basename), and sed masks the hex run right after `sha256:`, `sha256: `,
+  # `sha256=`, `sha256-`, `sha256 "` or `sha256 '` (a masked run that is not
+  # 64 long could not match the rule anyway). Every other pattern scans the
   # full text, so a key on an exempt line or in a lockfile still blocks.
+  #
+  # Pin shape, 64-hex pattern only: `codex-hooks.json` is a hooks manifest whose
+  # values are SHA-256 trust pins of hook scripts, written as a shell compare
+  # inside a JSON string: `... | grep -q '^<hex> ' || ...`. For a file whose
+  # basename is exactly `codex-hooks.json`, awk marks each digest-view line with
+  # "\003" (the added-line text has "\003" replaced, so only awk can set the
+  # mark), and sed masks a lowercase hex run only when a single quote and a
+  # caret come before it and a space and a single quote come after it. Any other
+  # 64-hex run in that file, such as a bare `"path": "<hex>"` value, still
+  # blocks; so does the same line in any other file. A run that is not 64 long
+  # could not match the rule anyway, so sed needs no length check (mawk builds
+  # without regex intervals could not honour `{64}`).
   # The mask runs in sed because a match loop or gsub in awk is quadratic on a
   # long line in some awks (BSD awk), and a hook that times out lets the commit
   # through; sed is linear on the same input.
@@ -242,13 +252,13 @@ scan_repo() {
   # A failed stage, or output without the "\002" line that awk prints last
   # (checked in jq), fails the scan. The mask uses [[:xdigit:]]: BSD sed in the
   # C locale is several times slower on a [0-9a-fA-F] range.
-  local sep=$'\002'
+  local sep=$'\002' pinmark=$'\003'
   added="$(set -o pipefail; echo "$diff" | LC_ALL=C awk '
     BEGIN {
-      split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS codex-hooks.json", a, " ")
+      split("uv.lock poetry.lock Pipfile.lock package-lock.json npm-shrinkwrap.json pnpm-lock.yaml yarn.lock bun.lock go.sum Gemfile.lock flake.lock composer.lock Package.resolved SHA256SUMS", a, " ")
       for (i in a) lock[a[i]] = 1
     }
-    /^diff --git /    { hdr = 1; cargo = 0; skip = 0; next }
+    /^diff --git /    { hdr = 1; cargo = 0; skip = 0; pin = 0; next }
     /^@@/             { hdr = 0 }
     /^\+\+\+ / && hdr {
       path = substr($0, 5)
@@ -257,17 +267,19 @@ scan_repo() {
       n = split(path, parts, "/")
       cargo = (parts[n] == "Cargo.lock")
       skip = (parts[n] in lock) || parts[n] ~ /\.sha256$/
+      pin = (parts[n] == "codex-hooks.json")
       next
     }
     /^\+/ {
       line = substr($0, 2)
-      if (index(line, "\002")) gsub(/\002/, "?", line)
+      if (index(line, "\002") || index(line, "\003")) gsub(/[\002\003]/, "?", line)
       if (cargo && length(line) == 77 && line ~ /^checksum = "[0-9a-f]+"$/) next
       print line
-      if (!skip) dv[++k] = line
+      if (!skip) dv[++k] = (pin ? "\003" line : line)
     }
     END { print "\002"; for (i = 1; i <= k; i++) print dv[i] }
-  ' | LC_ALL=C sed -E "/^$sep\$/,\$s/sha256(: ?|=|-| [\"'])[[:xdigit:]]+/<sha256>/g" \
+  ' | LC_ALL=C sed -E -e "/^$sep\$/,\$s/sha256(: ?|=|-| [\"'])[[:xdigit:]]+/<sha256>/g" \
+      -e "/^$pinmark/s/'\^[0-9a-f]+ '/<pin>/g" -e "s/^$pinmark//" \
     | LC_ALL=C tr '\200-\377' '?')" || {
     echo "scan-commit: extracting the staged lines failed in $repo" >&2
     return 1
